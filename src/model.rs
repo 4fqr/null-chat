@@ -22,13 +22,13 @@ impl ServerRole {
             ServerRole::Member => "Member",
         }
     }
-    pub fn badge_color(&self) -> iced::Color {
+    pub fn badge_color(&self) -> &'static str {
         match self {
-            ServerRole::Owner => iced::Color { r: 0.98, g: 0.66, b: 0.10, a: 1.0 },
-            ServerRole::CoOwner => iced::Color { r: 0.98, g: 0.66, b: 0.10, a: 0.75 },
-            ServerRole::Admin => iced::Color { r: 0.93, g: 0.26, b: 0.27, a: 1.0 },
-            ServerRole::Moderator => iced::Color { r: 0.34, g: 0.40, b: 0.95, a: 1.0 },
-            ServerRole::Member => iced::Color { r: 0.55, g: 0.57, b: 0.59, a: 1.0 },
+            ServerRole::Owner    => "#FAA61A",
+            ServerRole::CoOwner  => "#FAA61A",
+            ServerRole::Admin    => "#ED4245",
+            ServerRole::Moderator => "#5865F2",
+            ServerRole::Member   => "#8E9297",
         }
     }
     pub fn can_moderate(&self) -> bool {
@@ -120,12 +120,12 @@ pub enum UserStatus {
 }
 
 impl UserStatus {
-    pub fn color(&self) -> iced::Color {
+    pub fn color(&self) -> &'static str {
         match self {
-            UserStatus::Online => iced::Color { r: 0.23, g: 0.65, b: 0.37, a: 1.0 },
-            UserStatus::Away => iced::Color { r: 0.98, g: 0.66, b: 0.10, a: 1.0 },
-            UserStatus::DoNotDisturb => iced::Color { r: 0.93, g: 0.26, b: 0.27, a: 1.0 },
-            UserStatus::Invisible => iced::Color { r: 0.55, g: 0.57, b: 0.59, a: 1.0 },
+            UserStatus::Online        => "#57F287",
+            UserStatus::Away          => "#FEE75C",
+            UserStatus::DoNotDisturb  => "#ED4245",
+            UserStatus::Invisible     => "#8E9297",
         }
     }
     pub fn label(&self) -> &'static str {
@@ -366,19 +366,14 @@ pub fn format_date_ts(ts: u64) -> String {
     format!("Day {} {:02}:{:02}", day, h, m)
 }
 
-pub fn user_color_for(user_id: &str) -> iced::Color {
+pub fn user_color_for(user_id: &str) -> &'static str {
     let hash: u32 = user_id
         .bytes()
         .take(16)
         .fold(5381u32, |acc, b| acc.wrapping_mul(33).wrapping_add(b as u32));
     let palette = [
-        iced::Color { r: 0.345, g: 0.396, b: 0.949, a: 1.0 },
-        iced::Color { r: 0.231, g: 0.647, b: 0.365, a: 1.0 },
-        iced::Color { r: 0.980, g: 0.659, b: 0.102, a: 1.0 },
-        iced::Color { r: 0.922, g: 0.271, b: 0.620, a: 1.0 },
-        iced::Color { r: 0.102, g: 0.737, b: 0.612, a: 1.0 },
-        iced::Color { r: 0.584, g: 0.216, b: 0.996, a: 1.0 },
-        iced::Color { r: 0.988, g: 0.447, b: 0.243, a: 1.0 },
+        "#5865F2", "#3BA55C", "#FAA61A",
+        "#EB459E", "#1ABC9C", "#9B59B6", "#E67E22",
     ];
     palette[(hash as usize) % palette.len()]
 }

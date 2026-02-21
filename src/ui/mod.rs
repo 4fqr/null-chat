@@ -1,4 +1,2 @@
-pub mod command_center;
-pub mod message_view;
-pub mod sidebar;
-pub mod theme;
+// UI is now handled by the Python GUI (gui/main.py).
+// This module is kept as a stub for compatibility.

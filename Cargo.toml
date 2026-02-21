@@ -9,7 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 tokio             = { version = "1",    features = ["full"] }
-iced              = { version = "0.12", features = ["tokio"] }
 argon2            = "0.5"
 chacha20poly1305  = "0.10"
 aes-gcm           = "0.10"
