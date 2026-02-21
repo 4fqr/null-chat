@@ -45,7 +45,6 @@ enum Cmd {
     SendGroup   { group_id: String, body: String },
     AddFriend   { user_id: String, name: String },
     CreateGroup { name: String, #[serde(default)] desc: String },
-    JoinServer  { code: String },
     SaveProfile { name: String, #[serde(default)] nick: String, #[serde(default)] bio: String },
     SetStatus   { status: String },
     Kick        { context_id: String, user_id: String, is_server: bool },
@@ -746,34 +745,6 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
                 Event::Notif { kind: "success".into(), msg: "Group created!".into() },
                 Event::State { data: s.snapshot() },
             ]
-        }
-
-        Cmd::JoinServer { code } => {
-            let code = code.trim().to_uppercase();
-            if code.len() != 8 {
-                return vec![Event::Error { msg: "Server code is 8 characters.".into() }];
-            }
-            let my_id = s.my_user_id.clone();
-            let my_name = s.display_name().to_string();
-            let found = s.servers.iter().position(|srv| srv.server_code == code);
-            match found {
-                None => vec![Event::Error { msg: "Server not found. Check the code.".into() }],
-                Some(idx) => {
-                    if s.servers[idx].banned_ids.contains(&my_id) {
-                        return vec![Event::Error { msg: "You are banned from this server.".into() }];
-                    }
-                    if !s.servers[idx].members.iter().any(|m| m.user_id == my_id) {
-                        s.servers[idx].members.push(ServerMember {
-                            user_id: my_id, display_name: my_name,
-                            role: ServerRole::Member, muted: false, banned: false, joined_at: now_unix(),
-                        });
-                    }
-                    vec![
-                        Event::Notif { kind: "success".into(), msg: "Joined server!".into() },
-                        Event::State { data: s.snapshot() },
-                    ]
-                }
-            }
         }
 
         Cmd::SaveProfile { name, nick, bio } => {

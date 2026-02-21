@@ -129,17 +129,18 @@ class ScrollFrame(ctk.CTkScrollableFrame):
 class ModalBase(ctk.CTkToplevel):
     def __init__(self, parent, title: str, width=420, height=350):
         super().__init__(parent)
+        # keep the dialog above its parent and centred
+        self.transient(parent)
         self.title(title)
         self.geometry(f"{width}x{height}")
         self.resizable(False, False)
         self.configure(fg_color=BG_DARK)
-        self.grab_set()
         self.focus_set()
         # Centre on parent
+        self.update_idletasks()
         px = parent.winfo_rootx() + parent.winfo_width()  // 2 - width  // 2
         py = parent.winfo_rooty() + parent.winfo_height() // 2 - height // 2
         self.geometry(f"+{px}+{py}")
-
         ctk.CTkLabel(self, text=title, font=FONT_LG, text_color=TEXT_BRIGHT).pack(pady=(18,8))
 
 
@@ -181,20 +182,6 @@ class CreateGroupModal(ModalBase):
             self.destroy()
 
 
-class JoinServerModal(ModalBase):
-    def __init__(self, parent, on_submit):
-        super().__init__(parent, "Join Server", 380, 190)
-        self._cb = on_submit
-        ctk.CTkLabel(self, text="Invite Code", font=FONT_SM, text_color=TEXT_MUTED).pack(padx=24, anchor="w")
-        self._code = ctk.CTkEntry(self, fg_color=BG_INPUT, border_color=DIVIDER, text_color=TEXT)
-        self._code.pack(padx=24, pady=(4,14), fill="x")
-        ctk.CTkButton(self, text="Join", fg_color=BLURPLE, hover_color=BLURPLE_D, command=self._ok).pack()
-
-    def _ok(self):
-        code = self._code.get().strip()
-        if code:
-            self._cb(code)
-            self.destroy()
 
 
 class EditProfileModal(ModalBase):
@@ -521,6 +508,50 @@ class ChatArea(ctk.CTkFrame):
         if self._ctx:
             self._render_messages()
 
+# ─── Members panel ───────────────────────────────────────────────────────────
+class MembersPanel(ctk.CTkFrame):
+    def __init__(self, parent):
+        super().__init__(parent, fg_color=BG_DARK, width=200, corner_radius=0)
+        self.grid_propagate(False)
+        self._state = {}
+        self._ctx   = None
+        self._list = ScrollFrame(self, width=196)
+        self._list.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def update(self, state: dict, ctx: dict):
+        self._state = state
+        self._ctx   = ctx
+        self._render()
+
+    def _render(self):
+        for w in self._list.winfo_children():
+            w.destroy()
+        if not self._ctx or self._ctx.get("type") != "channel":
+            return
+        sid = self._ctx.get("server_id", "")
+        sv = next((s for s in self._state.get("servers", []) if s["id"] == sid), None)
+        if not sv:
+            return
+        ctk.CTkLabel(self._list, text="Members", font=FONT, text_color=TEXT_BRIGHT).grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        row = 1
+        # determine online based on friend last_seen
+        now = time.time()
+        friends = self._state.get("friends", [])
+        for m in sv.get("members", []):
+            name = m.get("display_name", "?")
+            online = False
+            for f in friends:
+                if f.get("user_id") == m.get("user_id"):
+                    ls = f.get("last_seen")
+                    if isinstance(ls, (int, float)) and now - ls < 300:
+                        online = True
+                    break
+            dot = "●"
+            color = GREEN if online else TEXT_MUTED
+            lbl = ctk.CTkLabel(self._list, text=f"{dot} {name}", font=FONT_SM, text_color=color, anchor="w")
+            lbl.grid(row=row, column=0, sticky="w", padx=8, pady=2)
+            row += 1
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 class Sidebar(ctk.CTkFrame):
@@ -633,9 +664,6 @@ class Sidebar(ctk.CTkFrame):
         ctk.CTkButton(row_frame, text="+ Group", height=28, fg_color=BG_CARD,
                        hover_color=BG_HOVER, text_color=TEXT_MUTED, font=FONT_XS,
                        command=lambda: self._on_action("create_group", {})).pack(side="left",padx=2)
-        ctk.CTkButton(row_frame, text="Join Server", height=28, fg_color=BG_CARD,
-                       hover_color=BG_HOVER, text_color=TEXT_MUTED, font=FONT_XS,
-                       command=lambda: self._on_action("join_server", {})).pack(side="left",padx=2)
 
     def _render_server(self, sv: dict):
         my_id    = self._state.get("my_id","")
@@ -736,12 +764,6 @@ class Rail(ctk.CTkFrame):
         self._servers_frame.pack(fill="x")
 
         self._divider()
-        # Join server
-        join_btn = ctk.CTkButton(self, text="+", width=46, height=46, fg_color=BG_DARK,
-                                  hover_color=GREEN, text_color=GREEN, corner_radius=23,
-                                  font=("Segoe UI",20,"bold"),
-                                  command=lambda: on_select("join_server"))
-        join_btn.pack(pady=4)
 
         # Tor indicator (bottom)
         self._tor_lbl = ctk.CTkLabel(self, text="●", font=("Segoe UI",18),
@@ -801,6 +823,7 @@ class MainWindow(ctk.CTkFrame):
         self._state = {}
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(2, weight=1)
+        self.grid_columnconfigure(3, weight=0)
 
         self._rail    = Rail(self, self._rail_select)
         self._rail.grid(row=0, column=0, sticky="ns")
@@ -811,19 +834,21 @@ class MainWindow(ctk.CTkFrame):
         self._chat    = ChatArea(self, ipc)
         self._chat.grid(row=0, column=2, sticky="nsew")
 
+        self._members = MembersPanel(self)
+        self._members.grid(row=0, column=3, sticky="ns")
+
+
     def update_state(self, state: dict):
         self._state = state
         self._rail.update_state(state)
         mode = self._sidebar._mode
         self._sidebar.set_mode(mode, state)
         self._chat.update_state(state)
+        self._members.update(state, self._chat._ctx)
 
     def _rail_select(self, sid: str):
-        if sid in ("home", "join_server"):
-            if sid == "join_server":
-                self._sidebar_action("join_server", {})
-            else:
-                self._sidebar.set_mode("home", self._state)
+        if sid == "home":
+            self._sidebar.set_mode("home", self._state)
         else:
             self._sidebar.set_mode(sid, self._state)
 
@@ -833,6 +858,8 @@ class MainWindow(ctk.CTkFrame):
         cid = ctx.get("id","")
         if cid in self._state.get("unread",{}):
             self._state["unread"].pop(cid, None)
+        # update member list pane
+        self._members.update(self._state, ctx)
 
     def _sidebar_action(self, action: str, data: dict):
         root = self.winfo_toplevel()
@@ -842,9 +869,6 @@ class MainWindow(ctk.CTkFrame):
         elif action == "create_group":
             CreateGroupModal(root, lambda name, desc: self._ipc.send(
                 {"cmd":"create_group","name":name,"desc":desc}))
-        elif action == "join_server":
-            JoinServerModal(root, lambda code: self._ipc.send(
-                {"cmd":"join_server","code":code}))
         elif action == "edit_profile":
             EditProfileModal(root, self._state,
                               lambda n,nk,b,s: (self._ipc.send({"cmd":"save_profile","name":n,"nick":nk,"bio":b}),
