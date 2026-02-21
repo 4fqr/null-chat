@@ -22,22 +22,45 @@ async fn main() {
         )
         .init();
 
-    // Ensure Python deps are installed quietly
-    let _ = std::process::Command::new("pip3")
+    // Set up a local venv so we never touch the system Python environment
+    let venv_dir   = PathBuf::from(".venv");
+    let pip_path   = venv_dir.join("bin").join("pip");
+    let python_bin = venv_dir.join("bin").join("python3");
+
+    if !venv_dir.exists() {
+        eprintln!("[null-chat] Creating Python venv at .venv …");
+        let status = std::process::Command::new("python3")
+            .args(["-m", "venv", ".venv"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("[null-chat] python3 -m venv failed (exit {:?})", s.code());
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("[null-chat] Could not run python3: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Install / upgrade deps into the venv (silent on subsequent runs)
+    let _ = std::process::Command::new(&pip_path)
         .args(["install", "--quiet", "--upgrade", "customtkinter", "pillow"])
         .status();
 
     // Find gui/main.py relative to working directory / binary
     let gui_path = find_gui_path();
 
-    // Spawn Python GUI in background
-    let mut python = std::process::Command::new("python3")
+    // Spawn Python GUI using the venv interpreter
+    let mut python = std::process::Command::new(&python_bin)
         .arg(&gui_path)
         .arg(GUI_PORT.to_string())
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("[null-chat] Failed to spawn Python GUI: {}", e);
-            eprintln!("[null-chat] Make sure python3 is installed.");
+            eprintln!("[null-chat] Make sure python3 is installed and .venv was created.");
             std::process::exit(1);
         });
 
