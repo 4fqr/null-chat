@@ -507,6 +507,7 @@ class ChatArea(ctk.CTkFrame):
             self._ipc.send({"cmd":"send_group","group_id":cid,"body":body})
         elif t == "channel":
             self._ipc.send({"cmd":"send_channel","server_id":sid,"channel_id":cid,"body":body})
+        self._toast("Message sent", color=BLURPLE)
         self._input.delete(0, tk.END)
 
     def update_state(self, state: dict):
@@ -877,8 +878,11 @@ class MainWindow(ctk.CTkFrame):
                 {"cmd":"create_group","name":name,"desc":desc}))
         elif action == "edit_profile":
             EditProfileModal(root, self._state,
-                              lambda n,nk,b,s: (self._ipc.send({"cmd":"save_profile","name":n,"nick":nk,"bio":b}),
-                                                self._ipc.send({"cmd":"set_status","status":s})))
+                              lambda n,nk,b,s: (
+                                  self._ipc.send({"cmd":"save_profile","name":n,"nick":nk,"bio":b}),
+                                  self._ipc.send({"cmd":"set_status","status":s}),
+                                  self._toast("Profile updated", color=BLURPLE)
+                              ))
         elif action == "manage_members":
             my_id    = self._state.get("my_id","")
             members  = data.get("members",[])
