@@ -53,21 +53,28 @@ async fn main() {
     // Find gui/main.py relative to working directory / binary
     let gui_path = find_gui_path();
 
-    // Spawn Python GUI using the venv interpreter
-    let mut python = std::process::Command::new(&python_bin)
-        .arg(&gui_path)
-        .arg(GUI_PORT.to_string())
-        .spawn()
-        .unwrap_or_else(|e| {
-            eprintln!("[null-chat] Failed to spawn Python GUI: {}", e);
-            eprintln!("[null-chat] Make sure python3 is installed and .venv was created.");
-            std::process::exit(1);
-        });
+    // Spawn Python GUI using the venv interpreter unless NO_UI=1 is set
+    let mut python = None;
+    if std::env::var_os("NO_UI").is_none() {
+        python = Some(
+            std::process::Command::new(&python_bin)
+                .arg(&gui_path)
+                .arg(GUI_PORT.to_string())
+                .spawn()
+                .unwrap_or_else(|e| {
+                    eprintln!("[null-chat] Failed to spawn Python GUI: {}", e);
+                    eprintln!("[null-chat] Make sure python3 is installed and .venv was created.");
+                    std::process::exit(1);
+                })
+        );
+    }
 
-    // Run the Rust backend (blocks until the GUI disconnects / process exits)
+    // Run the Rust backend (blocks until shutdown)
     app::run(GUI_PORT).await;
 
-    let _ = python.kill();
+    if let Some(mut p) = python {
+        let _ = p.kill();
+    }
 }
 
 fn find_gui_path() -> PathBuf {
