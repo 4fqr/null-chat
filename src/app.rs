@@ -1,8 +1,14 @@
+use std::any::TypeId;
+use std::time::Duration;
+use iced::futures::SinkExt;
+
 use iced::{
     Application, Command, Element, Event, Settings, Subscription, Theme,
     event, keyboard, window,
 };
 
+use crate::model::WireMessage;
+use crate::network::p2p::P2PStatus;
 use crate::ui::command_center::{CommandCenter, UiMessage};
 
 pub fn run() -> iced::Result {
@@ -69,6 +75,26 @@ impl Application for NullChatApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen().map(Message::EventOccurred)
+        let event_sub = event::listen().map(Message::EventOccurred);
+
+        let queue = self.command_center.incoming_queue();
+        let p2p_sub = iced::subscription::channel(
+            TypeId::of::<WireMessage>(),
+            64,
+            move |mut sender| async move {
+                loop {
+                    let msgs: Vec<WireMessage> = {
+                        let mut q = queue.lock().await;
+                        q.drain(..).collect::<Vec<_>>()
+                    };
+                    for msg in msgs {
+                        let _ = sender.send(Message::Ui(UiMessage::IncomingP2P(msg))).await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            },
+        );
+
+        Subscription::batch([event_sub, p2p_sub])
     }
 }

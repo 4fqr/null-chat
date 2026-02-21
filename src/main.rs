@@ -1,7 +1,8 @@
-#![allow(dead_code, unused_variables, clippy::all)]
+#![allow(dead_code, unused_variables, unused_imports, clippy::all)]
 
 mod app;
 mod crypto;
+mod model;
 mod network;
 mod panic_engine;
 mod protocol;
