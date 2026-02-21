@@ -44,8 +44,6 @@ pub const STATUS_PENDING: Color = YELLOW;
 pub const STATUS_INSECURE: Color= RED;
 pub const ACCENT: Color         = BLURPLE;
 pub const BG_BLACK: Color       = BG_DARKEST;
-// old aliases
-pub const BgBlack: Color        = BG_DARKEST;
 
 // ─── Border helpers ───────────────────────────────────────────────────────────
 

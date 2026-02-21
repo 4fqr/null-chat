@@ -1050,7 +1050,7 @@ impl CommandCenter {
     }
     // ─── View ─────────────────────────────────────────────────────────────────
 
-    pub fn view(&self) -> Element<UiMessage> {
+    pub fn view(&self) -> Element<'_, UiMessage> {
         match &self.phase {
             AppPhase::Setup { passphrase, confirm, display_name, error } => {
                 self.view_setup(passphrase, confirm, display_name, error.as_deref())
@@ -1165,7 +1165,7 @@ impl CommandCenter {
             .into()
     }
 
-    fn view_main(&self) -> Element<UiMessage> {
+    fn view_main(&self) -> Element<'_, UiMessage> {
         let rail = self.view_rail();
         let sidebar = self.view_sidebar();
         let main_area = self.view_main_area();
@@ -1198,7 +1198,7 @@ impl CommandCenter {
 
     // ─── Server Rail ─────────────────────────────────────────────────────────
 
-    fn view_rail(&self) -> Element<UiMessage> {
+    fn view_rail(&self) -> Element<'_, UiMessage> {
         let home_active = self.selected_pane == SelectedPane::Home;
         let home_btn = button(
             container(
@@ -1265,14 +1265,14 @@ impl CommandCenter {
 
     // ─── Sidebar ──────────────────────────────────────────────────────────────
 
-    fn view_sidebar(&self) -> Element<UiMessage> {
+    fn view_sidebar(&self) -> Element<'_, UiMessage> {
         match &self.selected_pane {
             SelectedPane::Home => self.view_home_sidebar(),
             SelectedPane::Server(sid) => self.view_server_sidebar(*sid),
         }
     }
 
-    fn view_home_sidebar(&self) -> Element<UiMessage> {
+    fn view_home_sidebar(&self) -> Element<'_, UiMessage> {
         let title = text("Direct Messages").size(12).style(iced::theme::Text::Color(TEXT_MUTED));
 
         let add_friend = button(text("+ Add Friend").size(13))
@@ -1398,7 +1398,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_server_sidebar(&self, sid: Uuid) -> Element<UiMessage> {
+    fn view_server_sidebar(&self, sid: Uuid) -> Element<'_, UiMessage> {
         let server = match self.servers.iter().find(|s| s.id == sid) {
             Some(s) => s,
             None => return Space::with_width(240).into(),
@@ -1522,7 +1522,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_me_area(&self) -> Element<UiMessage> {
+    fn view_me_area(&self) -> Element<'_, UiMessage> {
         let color = user_color_for(&self.my_user_id);
         let initials = user_initials(self.display_name());
         let avatar = container(
@@ -1556,7 +1556,7 @@ impl CommandCenter {
 
     // ─── Main Area ────────────────────────────────────────────────────────────
 
-    fn view_main_area(&self) -> Element<UiMessage> {
+    fn view_main_area(&self) -> Element<'_, UiMessage> {
         match &self.active_view {
             ActiveView::Friends => self.view_friends_home(),
             ActiveView::DirectMessage(fid) => self.view_dm(*fid),
@@ -1565,7 +1565,7 @@ impl CommandCenter {
         }
     }
 
-    fn view_friends_home(&self) -> Element<UiMessage> {
+    fn view_friends_home(&self) -> Element<'_, UiMessage> {
         let header = row![
             text("Friends").size(20).style(iced::theme::Text::Color(TEXT_WHITE)),
             Space::with_width(Length::Fill),
@@ -1644,7 +1644,7 @@ impl CommandCenter {
             .into()
     }
 
-    fn view_dm(&self, fid: Uuid) -> Element<UiMessage> {
+    fn view_dm(&self, fid: Uuid) -> Element<'_, UiMessage> {
         let friend = match self.friends.iter().find(|f| f.id == fid) {
             Some(f) => f,
             None => return Space::with_width(Length::Fill).into(),
@@ -1661,7 +1661,7 @@ impl CommandCenter {
         }).collect(), None, false)
     }
 
-    fn view_group(&self, gid: Uuid) -> Element<UiMessage> {
+    fn view_group(&self, gid: Uuid) -> Element<'_, UiMessage> {
         let group = match self.groups.iter().find(|g| g.id == gid) {
             Some(g) => g,
             None => return Space::with_width(Length::Fill).into(),
@@ -1688,7 +1688,7 @@ impl CommandCenter {
         self.view_chat_area_ex(&group.name, msgs, manage_btn, am_muted, Some(gid))
     }
 
-    fn view_channel(&self, sid: Uuid, cid: Uuid) -> Element<UiMessage> {
+    fn view_channel(&self, sid: Uuid, cid: Uuid) -> Element<'_, UiMessage> {
         let server = match self.servers.iter().find(|s| s.id == sid) {
             Some(s) => s,
             None => return Space::with_width(Length::Fill).into(),
@@ -1811,7 +1811,7 @@ impl CommandCenter {
             .into()
     }
 
-    fn view_message_row(&self, m: &ChatMsg) -> Element<UiMessage> {
+    fn view_message_row(&self, m: &ChatMsg) -> Element<'_, UiMessage> {
         let color = user_color_for(&m.from_id);
         let initials = user_initials(&m.from_name);
 
@@ -1853,7 +1853,7 @@ impl CommandCenter {
 
     // ─── Notifications ────────────────────────────────────────────────────────
 
-    fn view_notifications(&self) -> Element<UiMessage> {
+    fn view_notifications(&self) -> Element<'_, UiMessage> {
         if self.notifications.is_empty() {
             return Space::with_height(0).into();
         }
@@ -1889,7 +1889,7 @@ impl CommandCenter {
 
     // ─── Modals ───────────────────────────────────────────────────────────────
 
-    fn view_modal(&self) -> Element<UiMessage> {
+    fn view_modal(&self) -> Element<'_, UiMessage> {
         let content: Element<UiMessage> = match &self.modal {
             Modal::None => return Space::with_height(0).into(),
             Modal::AddFriend => self.view_modal_add_friend(),
@@ -1931,7 +1931,7 @@ impl CommandCenter {
         text(title).size(20).style(iced::theme::Text::Color(TEXT_WHITE)).into()
     }
 
-    fn view_modal_add_friend(&self) -> Element<UiMessage> {
+    fn view_modal_add_friend(&self) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Add Friend"),
             Space::with_height(12),
@@ -1965,7 +1965,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_new_group(&self) -> Element<UiMessage> {
+    fn view_modal_new_group(&self) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Create Group"),
             Space::with_height(12),
@@ -1999,7 +1999,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_new_server(&self) -> Element<UiMessage> {
+    fn view_modal_new_server(&self) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Create Server"),
             Space::with_height(12),
@@ -2033,7 +2033,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_join_server(&self) -> Element<UiMessage> {
+    fn view_modal_join_server(&self) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Join Server"),
             Space::with_height(12),
@@ -2061,7 +2061,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_edit_profile(&self) -> Element<UiMessage> {
+    fn view_modal_edit_profile(&self) -> Element<'_, UiMessage> {
         let user_id_row = row![
             text("Your ID:").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
             Space::with_width(8),
@@ -2136,7 +2136,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_migrate(&self) -> Element<UiMessage> {
+    fn view_modal_migrate(&self) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Migrate Device"),
             Space::with_height(12),
@@ -2157,7 +2157,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_server_info(&self, sid: Uuid) -> Element<UiMessage> {
+    fn view_modal_server_info(&self, sid: Uuid) -> Element<'_, UiMessage> {
         let server = match self.servers.iter().find(|s| s.id == sid) {
             Some(s) => s,
             None => return text("Server not found.").into(),
@@ -2186,7 +2186,7 @@ impl CommandCenter {
            .into()
     }
 
-    fn view_modal_edit_server(&self, sid: Uuid) -> Element<UiMessage> {
+    fn view_modal_edit_server(&self, sid: Uuid) -> Element<'_, UiMessage> {
         column![
             Self::modal_header("Edit Server"),
             Space::with_height(12),
@@ -2220,7 +2220,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_create_channel(&self, sid: Uuid) -> Element<UiMessage> {
+    fn view_modal_create_channel(&self, sid: Uuid) -> Element<'_, UiMessage> {
         let ch_type_options = ["Public", "Read-Only", "Staff Only", "Announcement"];
         let type_buttons: Vec<Element<UiMessage>> = ch_type_options.iter().enumerate().map(|(i, label)| {
             let active = self.modal_select == i;
@@ -2264,7 +2264,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_manage_members(&self, ctx_id: Uuid) -> Element<UiMessage> {
+    fn view_modal_manage_members(&self, ctx_id: Uuid) -> Element<'_, UiMessage> {
         // Could be a server or a group
         let is_server = self.servers.iter().any(|s| s.id == ctx_id);
         let my_can_moderate = if is_server {
@@ -2336,7 +2336,7 @@ impl CommandCenter {
            .into()
     }
 
-    fn view_member_row(&self, ctx_id: Uuid, uid: &str, name: &str, role: &str, muted: bool, is_server: bool, can_moderate: bool) -> Element<UiMessage> {
+    fn view_member_row(&self, ctx_id: Uuid, uid: &str, name: &str, role: &str, muted: bool, is_server: bool, can_moderate: bool) -> Element<'_, UiMessage> {
         let uid = uid.to_string();
         let color = user_color_for(&uid);
         let initials = user_initials(name);
@@ -2406,7 +2406,7 @@ impl CommandCenter {
             .into()
     }
 
-    fn view_modal_add_group_member(&self, gid: Uuid) -> Element<UiMessage> {
+    fn view_modal_add_group_member(&self, gid: Uuid) -> Element<'_, UiMessage> {
         let role_opts = ["Member", "Moderator", "Admin"];
         let role_btns: Vec<Element<UiMessage>> = role_opts.iter().enumerate().map(|(i, label)| {
             let active = self.modal_select == i;
@@ -2456,7 +2456,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_member_detail(&self, ctx_id: Uuid, user_id: &str, is_server: bool) -> Element<UiMessage> {
+    fn view_modal_member_detail(&self, ctx_id: Uuid, user_id: &str, is_server: bool) -> Element<'_, UiMessage> {
         let roles = if is_server {
             vec!["Member", "Moderator", "Admin", "Co-Owner"]
         } else {
@@ -2516,7 +2516,7 @@ impl CommandCenter {
         .into()
     }
 
-    fn modal_error_label(&self) -> Element<UiMessage> {
+    fn modal_error_label(&self) -> Element<'_, UiMessage> {
         if let Some(e) = &self.modal_err {
             text(e.as_str()).size(13).style(iced::theme::Text::Color(RED)).into()
         } else {
