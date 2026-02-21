@@ -434,8 +434,15 @@ impl AppState {
 
 pub async fn run(port: u16) {
     let addr = format!("127.0.0.1:{}", port);
-    let listener = TcpListener::bind(&addr).await
-        .expect("Failed to bind backend IPC port");
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("Failed to bind backend IPC port {}: {}", addr, e);
+            eprintln!("[null-chat] could not bind to {}: {}", addr, e);
+            eprintln!("[null-chat] is another instance already running? kill it or choose a different port.");
+            return;
+        }
+    };
     tracing::info!("Backend IPC listening on {}", addr);
 
     // Accept connections in a loop so Python can reconnect if needed
