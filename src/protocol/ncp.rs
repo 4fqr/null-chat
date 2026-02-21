@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroize;
 
-use crate::crypto::{DoubleRatchetSession, HybridKem, LocalIdentity};
-use crate::crypto::kem::{HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey};
+use crate::crypto::{DoubleRatchetSession, LocalIdentity};
+use crate::crypto::kem::HybridKemPublicKey;
 
 #[derive(Error, Debug)]
 pub enum NcpError {

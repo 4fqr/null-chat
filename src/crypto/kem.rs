@@ -1,5 +1,5 @@
 use pqcrypto_kyber::kyber1024;
-use pqcrypto_traits::kem::{PublicKey, SecretKey, SharedSecret, Ciphertext};
+use pqcrypto_traits::kem::{SecretKey, SharedSecret};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 use rand_core::OsRng;
 use sha3::{Digest, Sha3_256};

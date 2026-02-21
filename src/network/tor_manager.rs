@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_socks::tcp::Socks5Stream;

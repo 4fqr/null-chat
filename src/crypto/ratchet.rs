@@ -2,10 +2,9 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use rand_core::OsRng;
 use std::collections::HashMap;
-use zeroize::Zeroize;
 use thiserror::Error;
 
 use crate::crypto::kdf::{kdf_rk, ChainKey, MessageKey, RootKey, derive_aead_keys};

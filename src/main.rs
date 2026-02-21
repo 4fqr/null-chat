@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_imports, unused_variables, clippy::all)]
+#![allow(dead_code, unused_variables, clippy::all)]
 
 mod app;
 mod crypto;
@@ -15,11 +15,6 @@ fn main() -> iced::Result {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("null_chat=info")),
         )
         .init();
-
-    let _ = nix::sys::mman::mlockall(
-        nix::sys::mman::MlockAllFlags::MCL_CURRENT
-            | nix::sys::mman::MlockAllFlags::MCL_FUTURE,
-    );
 
     app::run()
 }

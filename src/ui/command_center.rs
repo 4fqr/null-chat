@@ -3,12 +3,15 @@ use iced::{
     Alignment, Color, Command, Element, Length,
 };
 
+use crate::storage::vault::EncryptedVault;
 use crate::ui::theme::{
     TEXT_DIM, TEXT_PRIMARY, TEXT_BRIGHT, STATUS_SECURE, STATUS_PENDING, STATUS_INSECURE,
     BgBlack, StatusBarStyle, PanelLeft, PanelMid, PanelRight,
     MessageHeaderStyle, ComposeBarStyle, UnlockCardStyle,
     FlatButton, ActiveFlatButton, SendButtonStyle, AccentButton, DarkInputStyle,
 };
+
+const MIN_PASSPHRASE_LEN: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TorCircuitDisplay {
@@ -26,7 +29,10 @@ impl Default for TorCircuitDisplay {
 
 #[derive(Debug, Clone)]
 pub enum UiMessage {
-    PassphraseChanged(String),
+    SetupPassphraseChanged(String),
+    SetupConfirmChanged(String),
+    SetupCreateAccount,
+    UnlockPassphraseChanged(String),
     UnlockVault,
     WorkspaceSelected(usize),
     RoomSelected(usize),
@@ -36,20 +42,28 @@ pub enum UiMessage {
     ConnectAccount(String),
     DisconnectAccount(String),
     SafetyNumberVerified(String),
+    ExportVaultRequested,
+    ShowMigrationGuide,
+    DismissMigrationGuide,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 enum AppPhase {
-    #[default]
-    VaultUnlock,
+    AccountSetup {
+        passphrase: String,
+        confirm: String,
+        error: Option<String>,
+    },
+    VaultUnlock {
+        passphrase: String,
+        error: Option<String>,
+    },
     MainInterface,
 }
 
 #[derive(Debug)]
 pub struct CommandCenter {
     phase: AppPhase,
-    passphrase: String,
-    unlock_error: Option<String>,
     selected_workspace: usize,
     selected_room: Option<usize>,
     message_input: String,
@@ -58,6 +72,8 @@ pub struct CommandCenter {
     messages: Vec<MessageEntry>,
     tor_state: TorCircuitDisplay,
     local_fingerprint: String,
+    vault_path: std::path::PathBuf,
+    show_migration_guide: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,14 +105,30 @@ impl CommandCenter {
     pub fn new() -> (Self, Command<UiMessage>) {
         let identity = crate::crypto::LocalIdentity::generate();
         let fingerprint = identity.fingerprint_hex();
+        let vault_path = EncryptedVault::default_path();
+        let is_first_run = EncryptedVault::is_first_run(&vault_path);
+
+        let phase = if is_first_run {
+            AppPhase::AccountSetup {
+                passphrase: String::new(),
+                confirm: String::new(),
+                error: None,
+            }
+        } else {
+            AppPhase::VaultUnlock {
+                passphrase: String::new(),
+                error: None,
+            }
+        };
+
         let state = Self {
-            phase: AppPhase::VaultUnlock,
-            passphrase: String::new(),
-            unlock_error: None,
+            phase,
             selected_workspace: 0,
             selected_room: None,
             message_input: String::new(),
             local_fingerprint: fingerprint,
+            vault_path,
+            show_migration_guide: false,
             workspaces: vec![
                 WorkspaceEntry {
                     id: String::from("ncp-sovereign"),
@@ -139,18 +171,75 @@ impl CommandCenter {
 
     pub fn update(&mut self, message: UiMessage) -> Command<UiMessage> {
         match message {
-            UiMessage::PassphraseChanged(p) => {
-                self.passphrase = p;
-                self.unlock_error = None;
+            UiMessage::SetupPassphraseChanged(p) => {
+                if let AppPhase::AccountSetup { passphrase, error, .. } = &mut self.phase {
+                    *passphrase = p;
+                    *error = None;
+                }
+            }
+            UiMessage::SetupConfirmChanged(c) => {
+                if let AppPhase::AccountSetup { confirm, error, .. } = &mut self.phase {
+                    *confirm = c;
+                    *error = None;
+                }
+            }
+            UiMessage::SetupCreateAccount => {
+                if let AppPhase::AccountSetup { passphrase, confirm, error } = &mut self.phase {
+                    let p = passphrase.clone();
+                    let c = confirm.clone();
+                    if p.len() < MIN_PASSPHRASE_LEN {
+                        *error = Some(format!(
+                            "PASSPHRASE TOO SHORT  //  MINIMUM {} CHARACTERS REQUIRED",
+                            MIN_PASSPHRASE_LEN
+                        ));
+                    } else if p != c {
+                        *error = Some(String::from(
+                            "PASSPHRASE MISMATCH  //  ENTRIES DO NOT MATCH",
+                        ));
+                    } else if passphrase_is_trivial(&p) {
+                        *error = Some(String::from(
+                            "PASSPHRASE TOO SIMPLE  //  USE MIXED CHARACTER CLASSES",
+                        ));
+                    } else {
+                        let mut vault = EncryptedVault::new();
+                        match vault.open(&self.vault_path, &p) {
+                            Ok(()) => {
+                                self.phase = AppPhase::MainInterface;
+                            }
+                            Err(e) => {
+                                *error = Some(format!("VAULT CREATION FAILED  //  {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+            UiMessage::UnlockPassphraseChanged(p) => {
+                if let AppPhase::VaultUnlock { passphrase, error } = &mut self.phase {
+                    *passphrase = p;
+                    *error = None;
+                }
             }
             UiMessage::UnlockVault => {
-                if self.passphrase.len() < 8 {
-                    self.unlock_error =
-                        Some(String::from("PASSPHRASE TOO SHORT  //  MINIMUM 8 CHARACTERS"));
-                } else {
-                    self.phase = AppPhase::MainInterface;
-                    self.passphrase.clear();
-                    self.unlock_error = None;
+                if let AppPhase::VaultUnlock { passphrase, error } = &mut self.phase {
+                    let p = passphrase.clone();
+                    if p.is_empty() {
+                        *error = Some(String::from("PASSPHRASE REQUIRED  //  FIELD IS EMPTY"));
+                    } else {
+                        let mut vault = EncryptedVault::new();
+                        match vault.open(&self.vault_path, &p) {
+                            Ok(()) => {
+                                self.phase = AppPhase::MainInterface;
+                            }
+                            Err(crate::storage::vault::VaultError::Decryption) => {
+                                *error = Some(String::from(
+                                    "INCORRECT PASSPHRASE  //  VAULT COULD NOT BE DECRYPTED",
+                                ));
+                            }
+                            Err(e) => {
+                                *error = Some(format!("VAULT ERROR  //  {}", e));
+                            }
+                        }
+                    }
                 }
             }
             UiMessage::WorkspaceSelected(idx) => {
@@ -180,6 +269,15 @@ impl CommandCenter {
             UiMessage::TorStateChanged(state) => {
                 self.tor_state = state;
             }
+            UiMessage::ShowMigrationGuide => {
+                self.show_migration_guide = true;
+            }
+            UiMessage::DismissMigrationGuide => {
+                self.show_migration_guide = false;
+            }
+            UiMessage::ExportVaultRequested => {
+                self.show_migration_guide = true;
+            }
             UiMessage::ConnectAccount(_) | UiMessage::DisconnectAccount(_) => {}
             UiMessage::SafetyNumberVerified(_) => {}
         }
@@ -187,28 +285,159 @@ impl CommandCenter {
     }
 
     pub fn view(&self) -> Element<'_, UiMessage> {
-        match self.phase {
-            AppPhase::VaultUnlock => self.view_vault_unlock(),
+        match &self.phase {
+            AppPhase::AccountSetup { passphrase, confirm, error } => {
+                self.view_account_setup(passphrase, confirm, error.as_deref())
+            }
+            AppPhase::VaultUnlock { passphrase, error } => {
+                self.view_vault_unlock(passphrase, error.as_deref())
+            }
             AppPhase::MainInterface => self.view_main_interface(),
         }
     }
 
-    fn view_vault_unlock(&self) -> Element<'_, UiMessage> {
+    fn view_account_setup(
+        &self,
+        passphrase: &str,
+        confirm: &str,
+        error: Option<&str>,
+    ) -> Element<'_, UiMessage> {
+        let title = text("NULLCHAT  //  FIRST RUN")
+            .size(22)
+            .style(iced::theme::Text::Color(TEXT_BRIGHT));
+
+        let subtitle = text("Create your encrypted vault. This passphrase cannot be recovered.")
+            .size(11)
+            .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let fp_label = text("YOUR IDENTITY FINGERPRINT")
+            .size(9)
+            .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let fp_value = text(self.local_fingerprint.as_str())
+            .size(10)
+            .style(iced::theme::Text::Color(STATUS_SECURE));
+
+        let pw_label = text("PASSPHRASE  (12 chars minimum, mixed case + symbols recommended)")
+            .size(9)
+            .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let pw_input = text_input("create passphrase...", passphrase)
+            .secure(true)
+            .on_input(UiMessage::SetupPassphraseChanged)
+            .on_submit(UiMessage::SetupCreateAccount)
+            .size(13)
+            .width(Length::Fill)
+            .style(iced::theme::TextInput::Custom(Box::new(DarkInputStyle)));
+
+        let confirm_label = text("CONFIRM PASSPHRASE")
+            .size(9)
+            .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let confirm_input = text_input("repeat passphrase...", confirm)
+            .secure(true)
+            .on_input(UiMessage::SetupConfirmChanged)
+            .on_submit(UiMessage::SetupCreateAccount)
+            .size(13)
+            .width(Length::Fill)
+            .style(iced::theme::TextInput::Custom(Box::new(DarkInputStyle)));
+
+        let create_btn = button(
+            container(
+                text("CREATE ACCOUNT")
+                    .size(12)
+                    .style(iced::theme::Text::Color(Color::BLACK)),
+            )
+            .width(Length::Fill)
+            .center_x()
+            .padding([6, 0, 6, 0]),
+        )
+        .width(Length::Fill)
+        .on_press(UiMessage::SetupCreateAccount)
+        .style(iced::theme::Button::Custom(Box::new(AccentButton)));
+
+        let error_row: Element<'_, UiMessage> = match error {
+            Some(msg) => text(msg)
+                .size(10)
+                .style(iced::theme::Text::Color(STATUS_INSECURE))
+                .into(),
+            None => Space::with_height(Length::Fixed(14.0)).into(),
+        };
+
+        let security_note = text(
+            "Argon2id (65 MiB, t=3, p=4)  //  AES-256-GCM  //  Double Ratchet + Kyber-1024",
+        )
+        .size(9)
+        .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let card = container(
+            column![
+                title,
+                Space::with_height(Length::Fixed(4.0)),
+                subtitle,
+                Space::with_height(Length::Fixed(16.0)),
+                horizontal_rule(1),
+                Space::with_height(Length::Fixed(12.0)),
+                fp_label,
+                Space::with_height(Length::Fixed(3.0)),
+                fp_value,
+                Space::with_height(Length::Fixed(16.0)),
+                pw_label,
+                Space::with_height(Length::Fixed(4.0)),
+                pw_input,
+                Space::with_height(Length::Fixed(10.0)),
+                confirm_label,
+                Space::with_height(Length::Fixed(4.0)),
+                confirm_input,
+                Space::with_height(Length::Fixed(12.0)),
+                create_btn,
+                error_row,
+                Space::with_height(Length::Fixed(14.0)),
+                horizontal_rule(1),
+                Space::with_height(Length::Fixed(10.0)),
+                security_note,
+            ]
+            .spacing(0)
+            .padding(28)
+            .width(Length::Fixed(500.0)),
+        )
+        .style(iced::theme::Container::Custom(Box::new(UnlockCardStyle)));
+
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .center_y()
+            .style(iced::theme::Container::Custom(Box::new(BgBlack)))
+            .into()
+    }
+
+    fn view_vault_unlock(
+        &self,
+        passphrase: &str,
+        error: Option<&str>,
+    ) -> Element<'_, UiMessage> {
         let title = text("NULLCHAT")
             .size(30)
             .style(iced::theme::Text::Color(TEXT_BRIGHT));
 
-        let subtitle = text("v0.1.0  //  SOVEREIGN SECURE MESSENGER")
+        let subtitle = text("v0.2.0  //  SOVEREIGN SECURE MESSENGER")
             .size(10)
             .style(iced::theme::Text::Color(TEXT_DIM));
+
+        let vault_path_label = text(
+            format!("VAULT: {}", self.vault_path.display()),
+        )
+        .size(9)
+        .style(iced::theme::Text::Color(TEXT_DIM));
 
         let passphrase_label = text("VAULT PASSPHRASE")
             .size(10)
             .style(iced::theme::Text::Color(TEXT_DIM));
 
-        let passphrase_input = text_input("enter passphrase...", &self.passphrase)
+        let passphrase_input = text_input("enter passphrase...", passphrase)
             .secure(true)
-            .on_input(UiMessage::PassphraseChanged)
+            .on_input(UiMessage::UnlockPassphraseChanged)
             .on_submit(UiMessage::UnlockVault)
             .size(13)
             .width(Length::Fill)
@@ -228,8 +457,8 @@ impl CommandCenter {
         .on_press(UiMessage::UnlockVault)
         .style(iced::theme::Button::Custom(Box::new(AccentButton)));
 
-        let error_row: Element<'_, UiMessage> = match &self.unlock_error {
-            Some(err) => text(err.as_str())
+        let error_row: Element<'_, UiMessage> = match error {
+            Some(msg) => text(msg)
                 .size(10)
                 .style(iced::theme::Text::Color(STATUS_INSECURE))
                 .into(),
@@ -246,7 +475,9 @@ impl CommandCenter {
             column![
                 title,
                 subtitle,
-                Space::with_height(Length::Fixed(28.0)),
+                Space::with_height(Length::Fixed(6.0)),
+                vault_path_label,
+                Space::with_height(Length::Fixed(22.0)),
                 passphrase_label,
                 Space::with_height(Length::Fixed(5.0)),
                 passphrase_input,
@@ -274,6 +505,10 @@ impl CommandCenter {
     }
 
     fn view_main_interface(&self) -> Element<'_, UiMessage> {
+        if self.show_migration_guide {
+            return self.view_migration_guide();
+        }
+
         let status_bar = self.view_status_bar();
         let left_col = self.view_workspace_column();
         let mid_col = self.view_room_column();
@@ -294,6 +529,82 @@ impl CommandCenter {
         .into()
     }
 
+    fn view_migration_guide(&self) -> Element<'_, UiMessage> {
+        let title = text("DEVICE MIGRATION  //  VAULT EXPORT PROCEDURE")
+            .size(16)
+            .style(iced::theme::Text::Color(TEXT_BRIGHT));
+
+        let vault_path_str = self.vault_path.display().to_string();
+
+        let step1 = text("STEP 1  —  SECURE COPY YOUR VAULT DIRECTORY")
+            .size(11)
+            .style(iced::theme::Text::Color(STATUS_SECURE));
+
+        let cmd1 = text(format!("  rsync -av --progress {}/ user@newdevice:~/.local/share/null-chat/vault/", vault_path_str))
+            .size(11)
+            .style(iced::theme::Text::Color(TEXT_PRIMARY));
+
+        let step2 = text("STEP 2  —  VERIFY INTEGRITY ON TARGET DEVICE")
+            .size(11)
+            .style(iced::theme::Text::Color(STATUS_SECURE));
+
+        let cmd2 = text(format!("  sha3sum {}/data.mdb", vault_path_str))
+            .size(11)
+            .style(iced::theme::Text::Color(TEXT_PRIMARY));
+
+        let step3 = text("STEP 3  —  INSTALL NULLCHAT ON TARGET DEVICE AND UNLOCK WITH YOUR PASSPHRASE")
+            .size(11)
+            .style(iced::theme::Text::Color(STATUS_SECURE));
+
+        let warning = text(
+            "WARNING: The vault is encrypted with AES-256-GCM. Without your passphrase, it is irrecoverable. There is no password reset."
+        )
+        .size(10)
+        .style(iced::theme::Text::Color(STATUS_PENDING));
+
+        let dismiss_btn = button(
+            text("CLOSE").size(11).style(iced::theme::Text::Color(Color::BLACK)),
+        )
+        .on_press(UiMessage::DismissMigrationGuide)
+        .style(iced::theme::Button::Custom(Box::new(AccentButton)));
+
+        let card = container(
+            column![
+                title,
+                Space::with_height(Length::Fixed(16.0)),
+                horizontal_rule(1),
+                Space::with_height(Length::Fixed(14.0)),
+                step1,
+                Space::with_height(Length::Fixed(6.0)),
+                cmd1,
+                Space::with_height(Length::Fixed(14.0)),
+                step2,
+                Space::with_height(Length::Fixed(6.0)),
+                cmd2,
+                Space::with_height(Length::Fixed(14.0)),
+                step3,
+                Space::with_height(Length::Fixed(18.0)),
+                horizontal_rule(1),
+                Space::with_height(Length::Fixed(12.0)),
+                warning,
+                Space::with_height(Length::Fixed(14.0)),
+                dismiss_btn,
+            ]
+            .spacing(0)
+            .padding(32)
+            .width(Length::Fixed(680.0)),
+        )
+        .style(iced::theme::Container::Custom(Box::new(UnlockCardStyle)));
+
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .center_y()
+            .style(iced::theme::Container::Custom(Box::new(BgBlack)))
+            .into()
+    }
+
     fn view_status_bar(&self) -> Element<'_, UiMessage> {
         let (tor_glyph, tor_color, tor_label) = match self.tor_state {
             TorCircuitDisplay::Ready => ("●", STATUS_SECURE, "CIRCUIT READY"),
@@ -309,6 +620,9 @@ impl CommandCenter {
                 text("NULLCHAT")
                     .size(11)
                     .style(iced::theme::Text::Color(TEXT_BRIGHT)),
+                text("  //  v0.2.0")
+                    .size(10)
+                    .style(iced::theme::Text::Color(TEXT_DIM)),
                 text("  //  TOR:")
                     .size(10)
                     .style(iced::theme::Text::Color(TEXT_DIM)),
@@ -369,7 +683,9 @@ impl CommandCenter {
                 .padding([5, 10, 5, 10])
                 .width(Length::Fill);
 
-                let btn = button(btn_content).width(Length::Fill).on_press(UiMessage::WorkspaceSelected(i));
+                let btn = button(btn_content)
+                    .width(Length::Fill)
+                    .on_press(UiMessage::WorkspaceSelected(i));
 
                 if i == self.selected_workspace {
                     btn.style(iced::theme::Button::Custom(Box::new(ActiveFlatButton))).into()
@@ -388,6 +704,14 @@ impl CommandCenter {
             .size(9)
             .style(iced::theme::Text::Color(TEXT_DIM));
 
+        let migrate_btn = button(
+            text("MIGRATE DEVICE")
+                .size(9)
+                .style(iced::theme::Text::Color(TEXT_DIM)),
+        )
+        .on_press(UiMessage::ShowMigrationGuide)
+        .style(iced::theme::Button::Custom(Box::new(FlatButton)));
+
         container(
             column![
                 container(
@@ -395,9 +719,9 @@ impl CommandCenter {
                 )
                 .padding([10, 10, 6, 10]),
                 column(workspace_buttons).spacing(1),
-                Space::with_height(Length::Fixed(18.0)),
+                Space::with_height(Length::Fill),
                 container(
-                    column![identity_header, horizontal_rule(1), fingerprint_text].spacing(4),
+                    column![identity_header, horizontal_rule(1), fingerprint_text, Space::with_height(Length::Fixed(8.0)), migrate_btn].spacing(4),
                 )
                 .padding([0, 10, 10, 10]),
             ]
@@ -448,7 +772,9 @@ impl CommandCenter {
                 .padding([5, 10, 5, 10])
                 .width(Length::Fill);
 
-                let btn = button(btn_content).width(Length::Fill).on_press(UiMessage::RoomSelected(i));
+                let btn = button(btn_content)
+                    .width(Length::Fill)
+                    .on_press(UiMessage::RoomSelected(i));
 
                 if self.selected_room == Some(i) {
                     btn.style(iced::theme::Button::Custom(Box::new(ActiveFlatButton))).into()
@@ -518,7 +844,8 @@ impl CommandCenter {
                 } else {
                     TEXT_PRIMARY
                 };
-                let fp_prefix = &m.sender_fingerprint[..8.min(m.sender_fingerprint.len())];
+                let fp_len = m.sender_fingerprint.len();
+                let fp_prefix = &m.sender_fingerprint[..8.min(fp_len)];
                 let verified_tag = if m.is_verified {
                     text("[✓]").size(9).style(iced::theme::Text::Color(STATUS_SECURE))
                 } else {
@@ -546,8 +873,25 @@ impl CommandCenter {
             })
             .collect();
 
-        let message_scroll = scrollable(column(message_rows).spacing(0).padding([6, 0, 6, 0]))
-            .height(Length::Fill);
+        let empty_hint: Element<'_, UiMessage> = if self.messages.is_empty() && self.selected_room.is_some() {
+            container(
+                text("NO MESSAGES  //  ENCRYPTION ACTIVE  //  BEGIN COMPOSING")
+                    .size(10)
+                    .style(iced::theme::Text::Color(TEXT_DIM)),
+            )
+            .width(Length::Fill)
+            .center_x()
+            .padding([18, 0, 0, 0])
+            .into()
+        } else {
+            Space::with_height(Length::Shrink).into()
+        };
+
+        let message_scroll = scrollable(
+            column![empty_hint, column(message_rows).spacing(0)]
+                .padding([6, 0, 6, 0]),
+        )
+        .height(Length::Fill);
 
         let placeholder_text = if self.selected_room.is_some() {
             "compose encrypted message..."
@@ -596,6 +940,13 @@ impl CommandCenter {
     }
 }
 
+fn passphrase_is_trivial(p: &str) -> bool {
+    let has_upper = p.chars().any(|c| c.is_uppercase());
+    let has_lower = p.chars().any(|c| c.is_lowercase());
+    let has_digit = p.chars().any(|c| c.is_ascii_digit());
+    !(has_upper && has_lower && has_digit)
+}
+
 fn utc_time_string() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -623,3 +974,5 @@ fn truncate_fingerprint_short(fp: &str) -> String {
         fp.to_string()
     }
 }
+
+

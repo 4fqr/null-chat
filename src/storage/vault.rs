@@ -2,14 +2,10 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
-    Argon2, PasswordHasher,
-};
+use argon2::Argon2;
 use heed::{Database, Env, EnvOpenOptions};
 use heed::types::Bytes;
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -41,6 +37,17 @@ pub struct EncryptedVault {
 impl EncryptedVault {
     pub fn new() -> Self {
         Self { env: None, aes_key: None }
+    }
+
+    pub fn default_path() -> std::path::PathBuf {
+        let base = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        base.join(".local/share/null-chat/vault")
+    }
+
+    pub fn is_first_run(vault_path: &Path) -> bool {
+        !vault_path.join(".vault_kdf_params").exists()
     }
 
     pub fn open(&mut self, path: &Path, passphrase: &str) -> Result<(), VaultError> {
