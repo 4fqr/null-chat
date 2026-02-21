@@ -69,7 +69,7 @@ enum Event {
 
 // ─── Serialisable state snapshot sent to Python on every change ──────────────
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct StateSnapshot {
     my_name:    String,
     my_id:      String,
@@ -84,14 +84,14 @@ struct StateSnapshot {
     unread:     HashMap<String, u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct FriendSnap {
     id: String,
     display_name: String,
     user_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct GroupSnap {
     id: String,
     name: String,
@@ -100,7 +100,7 @@ struct GroupSnap {
     messages: Vec<MsgSnap>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ServerSnap {
     id: String,
     name: String,
@@ -112,7 +112,7 @@ struct ServerSnap {
     banned_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ChannelSnap {
     id: String,
     name: String,
@@ -121,7 +121,7 @@ struct ChannelSnap {
     messages: Vec<MsgSnap>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct MemberSnap {
     user_id: String,
     display_name: String,
@@ -130,7 +130,7 @@ struct MemberSnap {
     banned: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct MsgSnap {
     id: String,
     from_id: String,
@@ -143,6 +143,7 @@ struct MsgSnap {
 
 // ─── App state ───────────────────────────────────────────────────────────────
 
+#[derive(PartialEq, Debug)]
 enum Phase { Setup, Unlock, Main }
 
 struct AppState {
@@ -161,6 +162,7 @@ struct AppState {
     incoming_queue: Arc<Mutex<Vec<WireMessage>>>,
     tor_socks: Option<String>,
     unread: HashMap<String, u32>,
+    vault: Option<crate::storage::vault::EncryptedVault>,
 }
 
 impl AppState {
@@ -188,6 +190,7 @@ impl AppState {
             incoming_queue: Arc::new(Mutex::new(Vec::new())),
             tor_socks: None,
             unread: HashMap::new(),
+            vault: None,
         }
     }
 
@@ -332,6 +335,151 @@ impl AppState {
             .find(|s| s.id == sid)
             .map(|s| s.my_role(&self.my_user_id))
             .unwrap_or(ServerRole::Member)
+    }
+
+    /// Persist the current snapshot into the vault (if open).
+    fn persist(&self) {
+        if let Some(v) = &self.vault {
+            if let Ok(json) = serde_json::to_vec(&self.snapshot()) {
+                let _ = v.put("state", b"snapshot", &json);
+            }
+        }
+    }
+
+    /// Attempt to load state from the vault (if available).
+    fn load_from_vault(&mut self) {
+        if let Some(v) = &self.vault {
+            if let Ok(Some(data)) = v.get("state", b"snapshot") {
+                if let Ok(snap) = serde_json::from_slice::<StateSnapshot>(&data) {
+                    self.apply_snapshot(snap);
+                }
+            }
+        }
+    }
+
+    fn apply_snapshot(&mut self, snap: StateSnapshot) {
+        self.my_name = snap.my_name;
+        self.my_user_id = snap.my_id;
+        self.my_nick = snap.my_nick;
+        self.my_status = match snap.my_status.as_str() {
+            "Online" => UserStatus::Online,
+            "Away" => UserStatus::Away,
+            "Do Not Disturb" => UserStatus::DoNotDisturb,
+            "Invisible" => UserStatus::Invisible,
+            _ => UserStatus::Online,
+        };
+        self.my_bio = snap.my_bio;
+        self.tor_status = match snap.tor_status.as_str() {
+            "Offline" => P2PStatus::Offline,
+            "Tor Connected" => P2PStatus::TorReady { onion: String::new() },
+            _ => P2PStatus::Offline,
+        };
+        self.unread = snap.unread;
+
+        self.friends = snap.friends.into_iter().map(|f| Friend {
+            id: Uuid::parse_str(&f.id).unwrap_or_else(|_| Uuid::new_v4()),
+            display_name: f.display_name,
+            user_id: f.user_id,
+            note: None,
+            added_at: now_unix(),
+            last_seen: None,
+        }).collect();
+
+        self.groups = snap.groups.into_iter().map(|g| GroupChat {
+            id: Uuid::parse_str(&g.id).unwrap_or_else(|_| Uuid::new_v4()),
+            name: g.name,
+            description: None,
+            owner_id: g.owner_id,
+            members: g.members.into_iter().map(|m| GroupMember {
+                user_id: m.user_id,
+                display_name: m.display_name,
+                role: match m.role.as_str() {
+                    "Owner" => GroupRole::Owner,
+                    "Admin" => GroupRole::Admin,
+                    "Moderator" => GroupRole::Moderator,
+                    _ => GroupRole::Member,
+                },
+                muted: m.muted,
+                banned: m.banned,
+                joined_at: now_unix(),
+            }).collect(),
+            messages: g.messages.into_iter().map(|m| GroupMessage {
+                id: Uuid::parse_str(&m.id).unwrap_or_else(|_| Uuid::new_v4()),
+                from_id: m.from_id,
+                from_name: m.from_name,
+                body: m.body,
+                timestamp: m.ts,
+                edited: m.edited,
+                reactions: Vec::new(),
+            }).collect(),
+            created_at: now_unix(),
+        }).collect();
+
+        self.servers = snap.servers.into_iter().map(|s| Server {
+            id: Uuid::parse_str(&s.id).unwrap_or_else(|_| Uuid::new_v4()),
+            name: s.name,
+            description: s.description,
+            server_code: s.server_code,
+            owner_id: s.owner_id,
+            channels: s.channels.into_iter().map(|c| Channel {
+                id: Uuid::parse_str(&c.id).unwrap_or_else(|_| Uuid::new_v4()),
+                name: c.name,
+                topic: c.topic,
+                channel_type: match c.ch_type.as_str() {
+                    "Public" => ChannelType::Public,
+                    "Read-Only" => ChannelType::ReadOnly,
+                    "Staff Only" => ChannelType::StaffOnly,
+                    "Announcement" => ChannelType::Announcement,
+                    _ => ChannelType::Public,
+                },
+                messages: c.messages.into_iter().map(|m| ChannelMessage {
+                    id: Uuid::parse_str(&m.id).unwrap_or_else(|_| Uuid::new_v4()),
+                    from_id: m.from_id,
+                    from_name: m.from_name,
+                    body: m.body,
+                    timestamp: m.ts,
+                    edited: m.edited,
+                    reactions: Vec::new(),
+                }).collect(),
+                position: 0,
+            }).collect(),
+            members: s.members.into_iter().map(|m| ServerMember {
+                user_id: m.user_id,
+                display_name: m.display_name,
+                role: match m.role.as_str() {
+                    "Owner" => ServerRole::Owner,
+                    "Co-Owner" => ServerRole::CoOwner,
+                    "Admin" => ServerRole::Admin,
+                    "Moderator" => ServerRole::Moderator,
+                    _ => ServerRole::Member,
+                },
+                muted: m.muted,
+                banned: m.banned,
+                joined_at: now_unix(),
+            }).collect(),
+            banned_ids: s.banned_ids,
+            created_at: now_unix(),
+            is_owned: false,
+        }).collect();
+
+        self.conversations = HashMap::new();
+        for (k, msgs) in snap.conversations {
+            if let Ok(uuid) = Uuid::parse_str(&k) {
+                let list = msgs.into_iter().map(|m| {
+                    let from_id = m.from_id.clone();
+                    DirectMessage {
+                        id: Uuid::parse_str(&m.id).unwrap_or_else(|_| Uuid::new_v4()),
+                        from_id: from_id.clone(),
+                        body: m.body,
+                        timestamp: m.ts,
+                        outgoing: from_id == self.my_user_id,
+                        edited: false,
+                        reactions: Vec::new(),
+                    }
+                }).collect();
+                self.conversations.insert(uuid, list);
+            }
+        }
     }
 
     fn my_role_in_group(&self, gid: Uuid) -> GroupRole {
@@ -501,6 +649,8 @@ async fn handle_connection(stream: tokio::net::TcpStream) {
                                 for evt in evts {
                                     send_event(&mut writer, &evt).await;
                                 }
+                                // save updated state
+                                state.persist();
                             }
                             Err(e) => {
                                 tracing::warn!("Bad command: {} — {}", raw, e);
@@ -515,6 +665,7 @@ async fn handle_connection(stream: tokio::net::TcpStream) {
             Some(wire) = rx.recv() => {
                 state.handle_incoming(wire);
                 send_event(&mut writer, &Event::State { data: state.snapshot() }).await;
+                state.persist();
             }
         }
     }
@@ -530,6 +681,16 @@ async fn send_event(writer: &mut tokio::net::tcp::OwnedWriteHalf, evt: &Event) {
 // ─── Command processor ───────────────────────────────────────────────────────
 
 async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
+    // reject non-setup commands while not in main phase
+    match &cmd {
+        Cmd::Setup { .. } | Cmd::Unlock { .. } | Cmd::GetState => {}
+        _ => {
+            if s.phase != Phase::Main {
+                return vec![Event::Error { msg: "Please unlock the vault first.".into() }];
+            }
+        }
+    }
+
     match cmd {
         Cmd::Setup { name, pass } => {
             let n = name.trim().to_string();
@@ -543,6 +704,10 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
             let mut vault = EncryptedVault::new();
             match vault.open(&s.vault_path.clone(), &p) {
                 Ok(()) => {
+                    // keep vault handle in state and load previous data if any
+                    s.vault = Some(vault);
+                    s.load_from_vault();
+
                     s.my_name = n.clone();
                     // Update nullsec server member display name
                     if let Some(srv) = s.servers.iter_mut().find(|x| x.id == NULLSEC_SERVER_ID) {
@@ -571,6 +736,8 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
             let mut vault = EncryptedVault::new();
             match vault.open(&s.vault_path.clone(), &p) {
                 Ok(()) => {
+                    s.vault = Some(vault);
+                    s.load_from_vault();
                     s.phase = Phase::Main;
                     let tor_events = start_tor(s).await;
                     let mut evts = vec![
