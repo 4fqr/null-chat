@@ -36,6 +36,14 @@ use iced::Background;
 
 const MIN_PASS: usize = 12;
 
+// ─── NullSec fixed server/channel IDs ────────────────────────────────────────
+// These UUIDs are constant so the server persists across sessions deterministically.
+const NULLSEC_SERVER_ID: Uuid = Uuid::from_bytes([0xa1,0xb2,0xc3,0xd4,0xe5,0xf6,0x78,0x90,0xab,0xcd,0xef,0x12,0x34,0x56,0x78,0x90]);
+const NULLSEC_CH_ANNOUNCE: Uuid = Uuid::from_bytes([0xaa,0xbb,0xcc,0xdd,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0x00,0x11,0x22]);
+const NULLSEC_CH_CHAT: Uuid     = Uuid::from_bytes([0xbb,0xcc,0xdd,0xee,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0x00,0x11,0x22,0x33]);
+const NULLSEC_CH_HACKING: Uuid  = Uuid::from_bytes([0xcc,0xdd,0xee,0xff,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0x00,0x11,0x22,0x33,0x44]);
+const NULLSEC_CODE: &str = "NULLSEC0";
+
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +62,6 @@ pub enum Modal {
     None,
     AddFriend,
     NewGroup,
-    NewServer,
     JoinServer,
     Profile,
     EditProfile,
@@ -94,7 +101,6 @@ pub enum UiMessage {
     SubmitAddFriend,
     SubmitNewGroup,
     AddMemberToGroup(Uuid),
-    SubmitNewServer,
     SubmitJoinServer,
     CreateChannel(Uuid),
     SaveServerEdit(Uuid),
@@ -196,16 +202,60 @@ impl CommandCenter {
             phase,
             vault_path,
             my_name: String::from("Anonymous"),
-            my_user_id: fp,
+            my_user_id: fp.clone(),
             my_nick: None,
             my_status: UserStatus::Online,
             my_bio: None,
-            selected_pane: SelectedPane::Home,
-            active_view: ActiveView::Friends,
+            selected_pane: SelectedPane::Server(NULLSEC_SERVER_ID),
+            active_view: ActiveView::Channel(NULLSEC_SERVER_ID, NULLSEC_CH_CHAT),
             modal: Modal::None,
             friends: Vec::new(),
             groups: Vec::new(),
-            servers: Vec::new(),
+            servers: {
+                let ch_ann = Channel {
+                    id: NULLSEC_CH_ANNOUNCE,
+                    name: String::from("announcements"),
+                    topic: Some(String::from("Official announcements from the owner")),
+                    channel_type: ChannelType::Announcement,
+                    messages: Vec::new(),
+                    position: 0,
+                };
+                let ch_chat = Channel {
+                    id: NULLSEC_CH_CHAT,
+                    name: String::from("chat"),
+                    topic: Some(String::from("General discussion — all members")),
+                    channel_type: ChannelType::Public,
+                    messages: Vec::new(),
+                    position: 1,
+                };
+                let ch_hack = Channel {
+                    id: NULLSEC_CH_HACKING,
+                    name: String::from("hacking"),
+                    topic: Some(String::from("Hacking drops and techniques")),
+                    channel_type: ChannelType::Announcement,
+                    messages: Vec::new(),
+                    position: 2,
+                };
+                vec![Server {
+                    id: NULLSEC_SERVER_ID,
+                    name: String::from("NullSec Hacking Ground"),
+                    description: Some(String::from("Sovereign. Encrypted. Underground.")),
+                    server_code: String::from(NULLSEC_CODE),
+                    owner_id: fp.clone(),
+                    channels: vec![ch_ann, ch_chat, ch_hack],
+                    members: vec![ServerMember {
+                        user_id: fp.clone(),
+                        display_name: String::from("Anonymous"),
+                        role: ServerRole::Owner,
+                        muted: false,
+                        banned: false,
+                        joined_at: now_unix(),
+                    }],
+                    banned_ids: Vec::new(),
+                    created_at: now_unix(),
+                    is_owned: true,
+                }]
+            },
             conversations: HashMap::new(),
             tor_status: P2PStatus::Offline,
             incoming_queue: Arc::new(Mutex::new(Vec::new())),
@@ -612,46 +662,6 @@ impl CommandCenter {
                     self.push_notif(Notification::success("Member added!"));
                 }
             }
-            UiMessage::SubmitNewServer => {
-                let name = self.modal_f1.trim().to_string();
-                if name.is_empty() {
-                    self.modal_err = Some("Enter a server name.".into());
-                } else {
-                    let sid = Uuid::new_v4();
-                    let ch = Channel {
-                        id: Uuid::new_v4(),
-                        name: String::from("general"),
-                        topic: Some(String::from("General discussion")),
-                        channel_type: ChannelType::Public,
-                        messages: Vec::new(),
-                        position: 0,
-                    };
-                    let first_ch = ch.id;
-                    self.servers.push(Server {
-                        id: sid,
-                        name,
-                        description: if self.modal_f2.is_empty() { None } else { Some(self.modal_f2.clone()) },
-                        server_code: generate_server_code(),
-                        owner_id: self.my_user_id.clone(),
-                        channels: vec![ch],
-                        members: vec![ServerMember {
-                            user_id: self.my_user_id.clone(),
-                            display_name: self.display_name().to_string(),
-                            role: ServerRole::Owner,
-                            muted: false,
-                            banned: false,
-                            joined_at: now_unix(),
-                        }],
-                        banned_ids: Vec::new(),
-                        created_at: now_unix(),
-                        is_owned: true,
-                    });
-                    self.modal = Modal::None;
-                    self.selected_pane = SelectedPane::Server(sid);
-                    self.active_view = ActiveView::Channel(sid, first_ch);
-                    self.push_notif(Notification::success("Server created!"));
-                }
-            }
             UiMessage::SubmitJoinServer => {
                 let code = self.modal_f1.trim().to_uppercase();
                 if code.len() != 8 {
@@ -868,7 +878,23 @@ impl CommandCenter {
             UiMessage::IncomingP2P(wire) => { self.handle_incoming(wire); }
             UiMessage::TorStatusChanged(status) => {
                 if let P2PStatus::TorReady { ref onion } = status {
-                    self.my_user_id = onion.clone();
+                    let old_id = self.my_user_id.clone();
+                    let new_id = onion.clone();
+                    let disp = self.my_nick.as_deref().unwrap_or(&self.my_name).to_string();
+                    self.my_user_id = new_id.clone();
+                    // Sync NullSec server ownership/membership to the new onion address
+                    if let Some(srv) = self.servers.iter_mut().find(|s| s.id == NULLSEC_SERVER_ID) {
+                        if srv.owner_id == old_id {
+                            srv.owner_id = new_id.clone();
+                        }
+                        for m in srv.members.iter_mut() {
+                            if m.user_id == old_id {
+                                m.user_id = new_id.clone();
+                                m.display_name = disp;
+                                break;
+                            }
+                        }
+                    }
                 }
                 let label = status.label().to_string();
                 self.tor_status = status;
@@ -1063,8 +1089,8 @@ impl CommandCenter {
     }
 
     fn view_setup<'a>(&self, pass: &str, confirm: &str, name: &str, error: Option<&str>) -> Element<'a, UiMessage> {
-        let header = text("Null Chat").size(32).style(iced::theme::Text::Color(TEXT_WHITE));
-        let subtitle = text("Sovereign end-to-end encrypted messenger over Tor").size(14).style(iced::theme::Text::Color(TEXT_MUTED));
+        let header = text("■ Null Chat").size(36).style(iced::theme::Text::Color(TEXT_WHITE));
+        let subtitle = text("Sovereign · Encrypted · Tor-native").size(13).style(iced::theme::Text::Color(TEXT_MUTED));
 
         let name_input = text_input("Choose a display name…", name)
             .on_input(UiMessage::SetupNameChanged)
@@ -1117,20 +1143,24 @@ impl CommandCenter {
             form
         };
 
-        let form = form.push(Space::with_height(16)).push(create_btn);
+        let form = form.push(Space::with_height(18)).push(create_btn);
 
-        container(form)
-            .style(iced::theme::Container::Custom(Box::new(CardStyle)))
-            .padding(40)
-            .center_x()
-            .center_y()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        container(
+            container(form)
+                .style(iced::theme::Container::Custom(Box::new(CardStyle)))
+                .padding(48)
+                .max_width(460)
+        )
+        .style(iced::theme::Container::Custom(Box::new(BgDarkest)))
+        .center_x()
+        .center_y()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn view_unlock<'a>(&self, pass: &str, error: Option<&str>) -> Element<'a, UiMessage> {
-        let header = text("Null Chat").size(32).style(iced::theme::Text::Color(TEXT_WHITE));
+        let header = text("■ Null Chat").size(36).style(iced::theme::Text::Color(TEXT_WHITE));
         let sub = text("Enter your vault passphrase").size(14).style(iced::theme::Text::Color(TEXT_MUTED));
 
         let pass_input = text_input("Passphrase…", pass)
@@ -1153,16 +1183,20 @@ impl CommandCenter {
                        .push(text(e).size(13).style(iced::theme::Text::Color(RED)));
         }
 
-        let form = form.push(Space::with_height(16)).push(unlock_btn);
+        let form = form.push(Space::with_height(18)).push(unlock_btn);
 
-        container(form)
-            .style(iced::theme::Container::Custom(Box::new(UnlockCardStyle)))
-            .padding(40)
-            .center_x()
-            .center_y()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        container(
+            container(form)
+                .style(iced::theme::Container::Custom(Box::new(UnlockCardStyle)))
+                .padding(48)
+                .max_width(420)
+        )
+        .style(iced::theme::Container::Custom(Box::new(BgDarkest)))
+        .center_x()
+        .center_y()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn view_main(&self) -> Element<'_, UiMessage> {
@@ -1238,18 +1272,24 @@ impl CommandCenter {
         }
 
         let add_srv_btn = button(
-            container(text("+").size(22).style(iced::theme::Text::Color(GREEN))).width(48).height(48).center_x().center_y()
+            container(
+                column![
+                    text("⊞").size(24).style(iced::theme::Text::Color(GREEN)),
+                    text("Join").size(9).style(iced::theme::Text::Color(TEXT_MUTED)),
+                ].align_items(Alignment::Center).spacing(0)
+            ).width(56).height(56).center_x().center_y()
         )
-        .on_press(UiMessage::OpenModal(Modal::NewServer))
+        .on_press(UiMessage::OpenModal(Modal::JoinServer))
         .style(iced::theme::Button::Custom(Box::new(ServerIconButton)))
         .padding(0);
 
         rail_btns.push(Space::with_height(Length::Fill).into());
         rail_btns.push(add_srv_btn.into());
-
-        // Status indicator at bottom
-        let status_dot = container(Space::with_width(10)).width(10).height(10);
-        rail_btns.push(status_dot.into());
+        // Tor status indicator at bottom
+        let tor_label = text(self.tor_status.label()).size(8)
+            .style(iced::theme::Text::Color(if matches!(self.tor_status, P2PStatus::TorReady { .. }) { GREEN } else { YELLOW }));
+        let tor_dot = container(tor_label).padding([4, 4]).center_x();
+        rail_btns.push(tor_dot.into());
 
         let rail_col = column(rail_btns).spacing(4).padding([8, 4]);
 
@@ -1405,14 +1445,22 @@ impl CommandCenter {
         };
         let my_role = self.my_role_in_server(sid);
 
-        let server_name = button(text(&server.name).size(15).style(iced::theme::Text::Color(TEXT_WHITE)))
-            .on_press(UiMessage::OpenModal(Modal::ServerInfo(sid)))
-            .style(iced::theme::Button::Custom(Box::new(FlatButton)))
-            .width(Length::Fill)
-            .padding([10, 12]);
+        let server_name = button(
+            row![
+                text(&server.name).size(15).style(iced::theme::Text::Color(TEXT_WHITE)),
+                Space::with_width(Length::Fill),
+                text("▾").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
+            ].align_items(Alignment::Center).padding([0, 4])
+        )
+        .on_press(UiMessage::OpenModal(Modal::ServerInfo(sid)))
+        .style(iced::theme::Button::Custom(Box::new(FlatButton)))
+        .width(Length::Fill)
+        .padding([12, 14]);
 
         let mut channel_items: Vec<Element<UiMessage>> = vec![
-            text("Channels").size(11).style(iced::theme::Text::Color(TEXT_MUTED)).into(),
+            container(
+                text("CHANNELS").size(10).style(iced::theme::Text::Color(TEXT_MUTED))
+            ).padding([8, 12, 4, 12]).into(),
         ];
 
         for ch in &server.channels {
@@ -1422,8 +1470,10 @@ impl CommandCenter {
             let active = self.active_view == ActiveView::Channel(sid, ch.id);
             let unread = self.unread.get(&ch.id.to_string()).copied().unwrap_or(0);
             let icon = ch.channel_type.icon();
+            let is_restricted = matches!(ch.channel_type, ChannelType::Announcement | ChannelType::StaffOnly | ChannelType::ReadOnly);
+            let ch_color = if active { TEXT_WHITE } else if is_restricted { ORANGE } else { TEXT_MUTED };
             let name_txt = text(format!("{} {}", icon, ch.name)).size(14)
-                .style(iced::theme::Text::Color(if active { TEXT_WHITE } else { TEXT_MUTED }));
+                .style(iced::theme::Text::Color(ch_color));
 
             let mut row_ch: Vec<Element<UiMessage>> = vec![
                 Space::with_width(8).into(),
@@ -1451,7 +1501,7 @@ impl CommandCenter {
                 .on_press(UiMessage::SelectView(ActiveView::Channel(sid, ch.id)))
                 .style(iced::theme::Button::Custom(btn_style))
                 .width(Length::Fill)
-                .padding([5, 4]);
+                .padding([8, 8]);
 
             channel_items.push(ch_btn.into());
         }
@@ -1494,11 +1544,16 @@ impl CommandCenter {
 
         let invite_code = container(
             column![
-                text("Server Code").size(11).style(iced::theme::Text::Color(TEXT_MUTED)),
-                text(&server.server_code).size(13)
-                    .style(iced::theme::Text::Color(BLURPLE)),
-            ].spacing(2)
-        ).padding([4, 8]);
+                text("INVITE CODE").size(10).style(iced::theme::Text::Color(TEXT_MUTED)),
+                Space::with_height(4),
+                container(
+                    text(&server.server_code).size(18)
+                        .style(iced::theme::Text::Color(BLURPLE))
+                ).padding([6, 12]),
+                text("Share this code to let people join").size(10)
+                    .style(iced::theme::Text::Color(TEXT_MUTED)),
+            ].spacing(2).align_items(Alignment::Center)
+        ).padding([8, 8]).width(Length::Fill).center_x();
 
         let me_area = self.view_me_area();
 
@@ -1526,31 +1581,40 @@ impl CommandCenter {
         let color = user_color_for(&self.my_user_id);
         let initials = user_initials(self.display_name());
         let avatar = container(
-            container(text(&initials).size(12).style(iced::theme::Text::Color(TEXT_WHITE)))
+            container(text(&initials).size(13).style(iced::theme::Text::Color(TEXT_WHITE)))
                 .style(iced::theme::Container::Custom(Box::new(AvatarContainer { color, radius: 16.0 })))
-                .width(32)
-                .height(32)
+                .width(34)
+                .height(34)
                 .center_x()
                 .center_y()
         );
 
-        let status_label = text(self.my_status.label()).size(11).style(iced::theme::Text::Color(TEXT_MUTED));
-        let name_label = text(self.display_name()).size(13).style(iced::theme::Text::Color(TEXT_WHITE));
+        let status_color = self.my_status.color();
+        let status_dot = container(Space::with_width(8))
+            .width(8).height(8)
+            .style(iced::theme::Container::Custom(Box::new(AvatarContainer { color: status_color, radius: 4.0 })));
 
-        let edit_btn = button(text("✏").size(14))
+        let name_label = text(self.display_name()).size(14).style(iced::theme::Text::Color(TEXT_WHITE));
+        let status_row = row![
+            status_dot,
+            Space::with_width(4),
+            text(self.my_status.label()).size(11).style(iced::theme::Text::Color(TEXT_MUTED)),
+        ].align_items(Alignment::Center);
+
+        let edit_btn = button(text("✏").size(15))
             .on_press(UiMessage::OpenModal(Modal::EditProfile))
             .style(iced::theme::Button::Custom(Box::new(FlatButton)))
-            .padding([2, 4]);
+            .padding([4, 8]);
 
         row![
             avatar,
-            Space::with_width(8),
-            column![name_label, status_label].spacing(1),
+            Space::with_width(10),
+            column![name_label, status_row].spacing(2),
             Space::with_width(Length::Fill),
             edit_btn,
         ]
         .align_items(Alignment::Center)
-        .padding([8, 8])
+        .padding([10, 10])
         .into()
     }
 
@@ -1567,15 +1631,15 @@ impl CommandCenter {
 
     fn view_friends_home(&self) -> Element<'_, UiMessage> {
         let header = row![
-            text("Friends").size(20).style(iced::theme::Text::Color(TEXT_WHITE)),
+            text("■ Friends").size(20).style(iced::theme::Text::Color(TEXT_WHITE)),
             Space::with_width(Length::Fill),
-            button(text("Add Friend").size(14))
+            button(text("+ Add Friend").size(14))
                 .on_press(UiMessage::OpenModal(Modal::AddFriend))
                 .style(iced::theme::Button::Custom(Box::new(BlurpleButton)))
-                .padding([6, 14]),
+                .padding([8, 16]),
         ]
         .align_items(Alignment::Center)
-        .padding([12, 16]);
+        .padding([14, 18]);
 
         if self.friends.is_empty() {
             let empty = container(
@@ -1609,24 +1673,24 @@ impl CommandCenter {
                     .width(40).height(40).center_x().center_y()
             );
 
-            let msg_btn = button(text("Message").size(12))
+            let msg_btn = button(text("Message").size(13))
                 .on_press(UiMessage::SelectView(ActiveView::DirectMessage(f.id)))
                 .style(iced::theme::Button::Custom(Box::new(GhostButton)))
-                .padding([4, 12]);
+                .padding([6, 16]);
 
             let card = container(
                 row![
                     av,
-                    Space::with_width(10),
+                    Space::with_width(12),
                     column![
                         text(&f.display_name).size(15).style(iced::theme::Text::Color(TEXT_WHITE)),
                         text(format!("ID: {}", short_id(&f.user_id))).size(11).style(iced::theme::Text::Color(TEXT_MUTED)),
-                    ].spacing(2),
+                    ].spacing(3),
                     Space::with_width(Length::Fill),
                     msg_btn,
                 ]
                 .align_items(Alignment::Center)
-                .padding([12, 16])
+                .padding([14, 18])
             )
             .style(iced::theme::Container::Custom(Box::new(MemberCardStyle)))
             .width(Length::Fill);
@@ -1634,7 +1698,7 @@ impl CommandCenter {
             cards.push(card.into());
         }
 
-        let list = scrollable(column(cards).spacing(4).padding(16))
+        let list = scrollable(column(cards).spacing(6).padding(18))
             .style(iced::theme::Scrollable::Custom(Box::new(SlimScrollbar)));
 
         container(column![header, horizontal_rule(1), list])
@@ -1755,8 +1819,8 @@ impl CommandCenter {
         )
         .style(iced::theme::Container::Custom(Box::new(MessageHeaderStyle)))
         .width(Length::Fill)
-        .padding([0, 0, 0, 0])
-        .height(48);
+        .padding([0, 4, 0, 0])
+        .height(52);
 
         let msg_items: Vec<Element<UiMessage>> = if msgs.is_empty() {
             vec![
@@ -1769,39 +1833,39 @@ impl CommandCenter {
         };
 
         let msg_list = scrollable(
-            column(msg_items).spacing(1).padding([8, 16])
+            column(msg_items).spacing(2).padding([12, 20])
         )
         .style(iced::theme::Scrollable::Custom(Box::new(SlimScrollbar)))
         .height(Length::Fill);
 
         let compose = if read_only {
             container(
-                text("You cannot send messages here.").size(13).style(iced::theme::Text::Color(TEXT_MUTED))
+                text("You cannot send messages in this channel.").size(13).style(iced::theme::Text::Color(TEXT_MUTED))
             )
             .style(iced::theme::Container::Custom(Box::new(ComposeBarStyle)))
             .width(Length::Fill)
-            .padding([14, 16])
+            .padding([16, 20])
         } else {
-            let input = text_input("Message…", &self.compose_text)
+            let input = text_input("Write a message…", &self.compose_text)
                 .on_input(UiMessage::ComposeChanged)
                 .on_submit(UiMessage::SendMessage)
                 .style(iced::theme::TextInput::Custom(Box::new(DiscordInput)))
-                .padding(12)
+                .padding(14)
                 .size(15)
                 .width(Length::Fill);
 
-            let send_btn = button(text("Send").size(14))
+            let send_btn = button(text("Send →").size(14))
                 .on_press(UiMessage::SendMessage)
                 .style(iced::theme::Button::Custom(Box::new(BlurpleButton)))
-                .padding([6, 14]);
+                .padding([10, 18]);
 
             container(
-                row![input, Space::with_width(8), send_btn]
+                row![input, Space::with_width(10), send_btn]
                     .align_items(Alignment::Center)
             )
             .style(iced::theme::Container::Custom(Box::new(ComposeBarStyle)))
             .width(Length::Fill)
-            .padding([8, 12])
+            .padding([12, 16])
         };
 
         container(column![header, horizontal_rule(1), msg_list, compose])
@@ -1816,15 +1880,15 @@ impl CommandCenter {
         let initials = user_initials(&m.from_name);
 
         let avatar = container(
-            container(text(&initials).size(11).style(iced::theme::Text::Color(TEXT_WHITE)))
-                .style(iced::theme::Container::Custom(Box::new(AvatarContainer { color, radius: 14.0 })))
-                .width(28).height(28).center_x().center_y()
+            container(text(&initials).size(12).style(iced::theme::Text::Color(TEXT_WHITE)))
+                .style(iced::theme::Container::Custom(Box::new(AvatarContainer { color, radius: 16.0 })))
+                .width(32).height(32).center_x().center_y()
         );
 
         let name_color = if m.outgoing { BLURPLE } else { color };
         let name_txt = text(&m.from_name).size(13)
             .style(iced::theme::Text::Color(name_color));
-        let time_txt = text(format!(" — {}", format_ts(m.timestamp))).size(11)
+        let time_txt = text(format!("  {}", format_ts(m.timestamp))).size(11)
             .style(iced::theme::Text::Color(TEXT_MUTED));
 
         let edited_txt: Option<Element<UiMessage>> = if m.edited {
@@ -1838,16 +1902,20 @@ impl CommandCenter {
 
         let msg_col = column![
             row![name_txt, time_txt].align_items(Alignment::Center),
+            Space::with_height(2),
             row(body_row).align_items(Alignment::Center),
-        ].spacing(1);
+        ].spacing(0);
 
-        row![
-            avatar,
-            Space::with_width(8),
-            msg_col,
-        ]
-        .align_items(Alignment::Start)
-        .padding([4, 0])
+        container(
+            row![
+                avatar,
+                Space::with_width(12),
+                msg_col,
+            ]
+            .align_items(Alignment::Start)
+            .padding([6, 8])
+        )
+        .width(Length::Fill)
         .into()
     }
 
@@ -1894,7 +1962,6 @@ impl CommandCenter {
             Modal::None => return Space::with_height(0).into(),
             Modal::AddFriend => self.view_modal_add_friend(),
             Modal::NewGroup => self.view_modal_new_group(),
-            Modal::NewServer => self.view_modal_new_server(),
             Modal::JoinServer => self.view_modal_join_server(),
             Modal::Profile | Modal::EditProfile => self.view_modal_edit_profile(),
             Modal::MigrateDevice => self.view_modal_migrate(),
@@ -1912,18 +1979,18 @@ impl CommandCenter {
             column![
                 row![
                     Space::with_width(Length::Fill),
-                    button(text("✕").size(16))
+                    button(text("✕").size(18))
                         .on_press(UiMessage::CloseModal)
                         .style(iced::theme::Button::Custom(Box::new(FlatButton)))
-                        .padding([4, 8]),
+                        .padding([4, 10]),
                 ],
                 content,
             ]
-            .spacing(4)
+            .spacing(6)
         )
         .style(iced::theme::Container::Custom(Box::new(CardStyle)))
-        .max_width(480)
-        .padding(24)
+        .max_width(500)
+        .padding(28)
         .into()
     }
 
@@ -1999,62 +2066,39 @@ impl CommandCenter {
         .into()
     }
 
-    fn view_modal_new_server(&self) -> Element<'_, UiMessage> {
-        column![
-            Self::modal_header("Create Server"),
-            Space::with_height(12),
-            text("Server Name").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
-            text_input("My Server…", &self.modal_f1)
-                .on_input(UiMessage::Field1Changed)
-                .style(iced::theme::TextInput::Custom(Box::new(DiscordInput)))
-                .padding(10).size(14),
-            Space::with_height(8),
-            text("Description (optional)").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
-            text_input("Server description…", &self.modal_f2)
-                .on_input(UiMessage::Field2Changed)
-                .style(iced::theme::TextInput::Custom(Box::new(DiscordInput)))
-                .padding(10).size(14),
-            Space::with_height(4),
-            self.modal_error_label(),
-            Space::with_height(12),
-            row![
-                button(text("Cancel").size(14))
-                    .on_press(UiMessage::CloseModal)
-                    .style(iced::theme::Button::Custom(Box::new(GhostButton)))
-                    .padding([8, 16]),
-                Space::with_width(8),
-                button(text("Create Server").size(14))
-                    .on_press(UiMessage::SubmitNewServer)
-                    .style(iced::theme::Button::Custom(Box::new(BlurpleButton)))
-                    .padding([8, 16]),
-            ].align_items(Alignment::Center),
-        ]
-        .spacing(4)
-        .into()
-    }
-
     fn view_modal_join_server(&self) -> Element<'_, UiMessage> {
         column![
-            Self::modal_header("Join Server"),
-            Space::with_height(12),
-            text("Server Code (8 characters)").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
-            text_input("ABCD1234…", &self.modal_f1)
+            Self::modal_header("⊞ Join NullSec Hacking Ground"),
+            Space::with_height(6),
+            text("Enter the server invite code to join.").size(13).style(iced::theme::Text::Color(TEXT_MUTED)),
+            Space::with_height(4),
+            container(
+                row![
+                    text("Invite code:").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
+                    Space::with_width(8),
+                    text(NULLSEC_CODE).size(16).style(iced::theme::Text::Color(BLURPLE)),
+                ].align_items(Alignment::Center)
+            ).padding([6, 10]),
+            Space::with_height(10),
+            text("Server Code (8 chars)").size(12).style(iced::theme::Text::Color(TEXT_MUTED)),
+            text_input("e.g. NULLSEC0", &self.modal_f1)
                 .on_input(UiMessage::Field1Changed)
+                .on_submit(UiMessage::SubmitJoinServer)
                 .style(iced::theme::TextInput::Custom(Box::new(DiscordInput)))
-                .padding(10).size(14),
+                .padding(12).size(15),
             Space::with_height(4),
             self.modal_error_label(),
-            Space::with_height(12),
+            Space::with_height(14),
             row![
                 button(text("Cancel").size(14))
                     .on_press(UiMessage::CloseModal)
                     .style(iced::theme::Button::Custom(Box::new(GhostButton)))
-                    .padding([8, 16]),
-                Space::with_width(8),
-                button(text("Join").size(14))
+                    .padding([10, 20]),
+                Space::with_width(10),
+                button(text("Join Server →").size(14))
                     .on_press(UiMessage::SubmitJoinServer)
                     .style(iced::theme::Button::Custom(Box::new(BlurpleButton)))
-                    .padding([8, 16]),
+                    .padding([10, 20]),
             ].align_items(Alignment::Center),
         ]
         .spacing(4)
