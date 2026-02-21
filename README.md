@@ -1,200 +1,157 @@
 # Null Chat
 
-A sovereign, post-quantum secure messenger for Linux. Null Chat operates exclusively over Tor Onion Services, stores all data in a locally-encrypted vault, and serves as a hardened protocol gateway to legacy networks including Discord and Matrix.
+**Sovereign post-quantum secure messenger routed over Tor.**
+
+Null Chat is a fully offline-capable, end-to-end encrypted chat application
+that routes all traffic through the Tor network. It features a Discord-style
+interface with servers, channels, group chats, direct messages, and a complete
+staff moderation hierarchy — all without any central server.
+
+---
+
+## Features
+
+### Security
+- **Post-quantum key exchange** — ML-KEM (Kyber) + X25519 hybrid KEM
+- **Double Ratchet** session encryption for forward secrecy
+- **AES-256-GCM** for all vault storage
+- **Argon2id** for passphrase key derivation
+- **Tor hidden services** — your identity is your `.onion` address
+- **Encrypted vault** — all data stored locally, encrypted at rest
+- **Panic engine** — `Ctrl+Alt+Shift+X` destroys all local data instantly
+- **Secure delete** — multiple-pass overwrite on sensitive files
+
+### Communication
+- **Direct Messages** — peer-to-peer over Tor, no relay server
+- **Group Chats** — multi-party messaging with owner/admin/moderator/member roles
+- **Servers** — Discord-like servers with named channels
+- **Real Tor P2P** — messages sent via SOCKS5 proxy directly to `.onion` peers
+
+### User Features
+- **Global nickname** — set an optional display alias separate from your vault name
+- **Status** — Online, Away, Do Not Disturb, Invisible
+- **Profile / Bio** — optional description visible to peers
+- **Friend list** — add friends by `.onion` User ID
+
+### Server & Group Management
+- **Role hierarchy** — Owner → Co-Owner → Admin → Moderator → Member
+- **Channel types:**
+  - `Public` — everyone can read and write
+  - `Read-Only` — everyone can read, only staff (Mod+) can write
+  - `Staff Only` — only staff can see and use
+  - `Announcement` — only Owner/Admin can post
+- **Moderation actions** — Kick, Ban, Mute, Unmute per user
+- **Ban list management** — view and unban server members
+- **Role assignment** — promote/demote members in servers and groups
+- **Server editing** — rename server, update description
+- **Channel creation** — create channels with custom types
+- **Invite codes** — 8-character server codes for inviting members
+
+### UI
+- **Discord-inspired layout** — server rail, sidebar, main chat area
+- **Premium dark theme** — Discord colour palette with smooth interactions
+- **Unread badges** — per-DM, group, and channel
+- **Notification toasts** — dismissable info/success/warn/error notifications
+- **Avatar initials** — colour-coded per user ID
+- **Role badges** — colour-coded role labels in member lists
 
 ---
 
 ## Architecture
 
-The application is organized into five independent subsystems with strict module boundaries:
-
-| Module | Responsibility |
-|---|---|
-| `crypto/` | Key generation, hybrid KEM, Double Ratchet, KDF |
-| `network/` | Tor SOCKS5 management, traffic morphing |
-| `protocol/` | NCP session framing, Discord gateway, Matrix client |
-| `storage/` | AES-256-GCM encrypted vault (LMDB), secure deletion |
-| `ui/` | Iced-based command center, vault unlock, status display |
-
-There is no shared mutable global state. Each subsystem communicates through typed message passing. The UI is a pure function of application state — it holds no secrets.
-
----
-
-## Null Cryptographic Protocol (NCP)
-
-### Key Exchange
-
-Session establishment uses a hybrid KEM combining X25519 and Kyber-1024. A compromised classical channel does not compromise the post-quantum security of the Kyber component, and vice versa. The shared secret is the SHA-3 hash of the concatenated X25519 and Kyber shared secrets, domain-separated with the label `NCP-HYBRID-KEM-v1`.
-
 ```
-shared_secret = SHA3-256("NCP-HYBRID-KEM-v1" || X25519_ss || Kyber1024_ss)
+null-chat/
+├── src/
+│   ├── main.rs              # Entry point
+│   ├── app.rs               # iced Application wrapper + P2P subscription
+│   ├── model.rs             # All data models + wire protocol
+│   ├── panic_engine.rs      # Emergency data destruction
+│   ├── crypto/
+│   │   ├── identity.rs      # LocalIdentity keypair + fingerprint
+│   │   ├── kdf.rs           # Chain/Message/Root key derivation
+│   │   ├── kem.rs           # ML-KEM + X25519 hybrid KEM
+│   │   └── ratchet.rs       # Double Ratchet session
+│   ├── network/
+│   │   ├── p2p.rs           # Tor hidden service + TCP listener + SOCKS5 send
+│   │   ├── tor_manager.rs   # Tor process management
+│   │   └── traffic_morph.rs # Traffic analysis resistance
+│   ├── protocol/
+│   │   ├── ncp.rs           # Null Chat Protocol encapsulation
+│   │   ├── discord.rs       # Discord protocol adapter (stub)
+│   │   └── matrix.rs        # Matrix protocol adapter (stub)
+│   ├── storage/
+│   │   ├── vault.rs         # AES-256-GCM + Argon2id encrypted LMDB vault
+│   │   └── secure_delete.rs # Multi-pass file wiping
+│   └── ui/
+│       ├── command_center.rs # Full UI controller — all views, modals, update loop
+│       ├── theme.rs          # Premium Discord-style iced StyleSheet implementations
+│       ├── message_view.rs   # (stub)
+│       └── sidebar.rs        # (stub)
 ```
 
-### Double Ratchet
+---
 
-Forward secrecy is enforced by the Double Ratchet Algorithm. Every message derives a unique symmetric key that is discarded after use. The root KDF chain uses HKDF-SHA3-256 with the domain label `NCP-RATCHET-v1` and outputs 96 bytes split into: new root key (32), new chain key (32), header key (32).
+## Wire Protocol
 
-Message keys are derived from the chain key via HMAC-SHA3-256:
-- `message_key = HMAC-SHA3-256(chain_key, 0x01)`
-- `next_chain_key = HMAC-SHA3-256(chain_key, 0x02)`
+All messages are sent as JSON over TCP through a Tor SOCKS5 proxy:
 
-Per-message AEAD keys are derived from the message key via HKDF-SHA3-256 with the labels `NCP-ENC-KEY` (32 bytes) and `NCP-NONCE` (12 bytes).
+```json
+{
+  "kind": {"DirectMessage": null},
+  "from_id": "abc123...onion",
+  "from_name": "Alice",
+  "target_id": "xyz789...onion",
+  "body": "Hello!",
+  "timestamp": 1708000000
+}
+```
 
-### Symmetric Encryption
-
-ChaCha20-Poly1305 with per-message key and nonce derived from the Double Ratchet. Associated data includes the ratchet header fields (DH public key, previous chain length, message number) to prevent header tampering without requiring header encryption in this revision.
-
-### Identity
-
-Users are identified by the SHA-3 (Keccak-256) hash of their Ed25519 verifying key. There are no usernames, handles, or server-assigned identifiers. Contact verification requires manual comparison of full 256-bit safety numbers out-of-band.
+`WireKind` variants: `DirectMessage`, `GroupMessage`, `ChannelMessage`, `FriendRequest`, `GroupInvite`, `ModerationAction`, `NicknameUpdate`, `RoleAssignment`, `Ping`
 
 ---
 
-## Storage
-
-### Encrypted Vault
-
-All persistent data — messages, sessions, credentials, identity keys — resides in a single LMDB database directory encrypted with AES-256-GCM. The encryption key is derived from a passphrase using Argon2id with the following parameters:
-
-| Parameter | Value |
-|---|---|
-| Memory | 64 MiB |
-| Iterations | 3 |
-| Parallelism | 4 |
-| Output | 256-bit key |
-
-A random 256-bit salt is stored alongside the database. If a TPM is present, the salt should be sealed to it; the current implementation stores the salt in a plaintext file adjacent to the vault. TPM sealing is planned for a future revision.
-
-Each individual record is encrypted independently before writing to LMDB. The per-record nonce is randomly generated and prepended to the ciphertext.
-
-### Secure Deletion
-
-`SecureDelete::wipe_file` performs a 7-pass overwrite before unlinking the file: three DoD 5220.22-M passes (0x00, 0xFF, 0x00) followed by three random passes followed by a final zero pass. This is a best-effort implementation — journaling filesystems and SSDs with wear leveling may not honor sequential writes to the same logical block.
-
----
-
-## Network
-
-### Tor Integration
-
-The `TorManager` connects to a running Tor SOCKS5 proxy at `127.0.0.1:9050`. All outbound connections — sovereign NCP and legacy gateway traffic — are routed through this proxy. Circuit renewal is available via the control port at `127.0.0.1:9051` using the `SIGNAL NEWNYM` command.
-
-The application does not bundle a Tor binary. Tor must be installed and running on the host before Null Chat is started.
-
-### Traffic Morphing
-
-`TrafficMorpher` pads outbound packets to one of three uniform sizes (1 KiB, 5 KiB, 10 KiB) and introduces a randomized send delay of 50–500 ms per message. This mitigates traffic correlation attacks based on packet size or inter-arrival timing at the cost of increased latency.
-
----
-
-## Build Instructions
+## Building
 
 ### Prerequisites
+- Rust stable (1.75+)
+- Tor installed (`apt install tor` / `brew install tor`)
 
-All platforms require a stable Rust toolchain (1.75 or later) and a running Tor daemon.
-
-#### Fedora
-
-```sh
-sudo dnf install tor rust cargo
-sudo systemctl enable --now tor
+```bash
 git clone https://github.com/4fqr/null-chat
 cd null-chat
 cargo build --release
+./target/release/null-chat
 ```
 
-#### Arch Linux
+### First Run
+On first launch you'll be prompted to:
+1. Choose a display name
+2. Create a vault passphrase (>=12 chars, mixed case + digit required)
 
-```sh
-sudo pacman -S tor rust
-sudo systemctl enable --now tor
-git clone https://github.com/4fqr/null-chat
-cd null-chat
-cargo build --release
-```
-
-#### Ubuntu / Debian
-
-```sh
-sudo apt install tor build-essential curl
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-sudo systemctl enable --now tor
-git clone https://github.com/4fqr/null-chat
-cd null-chat
-cargo build --release
-```
-
-The compiled binary is at `target/release/null-chat`. No installation step is required; the binary is self-contained.
+Your passphrase is **never stored** — it derives the AES-256 key via Argon2id.
 
 ---
 
-## Configuration
+## Privacy Model
 
-On first launch, Null Chat generates a fresh Ed25519 identity keypair. The identity is stored in the encrypted vault after the passphrase is set. There is no configuration file. All user-adjustable parameters are set at vault creation time (passphrase strength, vault path).
-
-The vault is created in `$HOME/.local/share/null-chat/vault/` by default. The KDF salt is written to `.vault_kdf_params` within that directory.
-
----
-
-## Threat Model
-
-### Protected Against
-
-- **Passive network surveillance**: All traffic exits through Tor Onion Services. An observer watching the network link sees only uniformly-sized, randomly-timed Tor traffic.
-- **Forward secrecy compromise**: A stolen session key compromises at most one message. The Double Ratchet guarantees that neither past nor future messages are recoverable from a single session key.
-- **Harvest-and-decrypt (quantum)**: The hybrid X25519 + Kyber-1024 key exchange ensures that an adversary storing ciphertexts today cannot decrypt them with a future quantum computer, as long as Kyber-1024 holds.
-- **Physical disk seizure**: AES-256-GCM with Argon2id key derivation protects vault contents at rest.
-- **Forensic file recovery**: Secure deletion makes reasonable efforts to overwrite deleted content at the filesystem layer.
-
-### Not Protected Against
-
-- **Endpoint compromise**: A compromised OS or kernel module can read plaintext from process memory regardless of application-layer protections.
-- **Metadata correlation at Tor exit**: NCP traffic uses Onion Services and has no exit node. However, traffic timing correlation at the Tor network level remains a theoretical attack by a global passive adversary.
-- **SSD wear-leveling bypass**: Secure deletion is unreliable on flash storage. Full-disk encryption at the OS layer (LUKS) should be used in conjunction with this application.
-- **Passphrase brute-force with weak passphrases**: Argon2id raises the cost of brute-force but does not make it impossible. Use a passphrase of sufficient entropy.
-- **Malicious Tor binary**: The application connects to a system-provided Tor daemon. The integrity of the Tor binary is outside this application's control.
+| Threat | Mitigation |
+|--------|-----------|
+| Server interception | Tor hidden services — no IP exposed |
+| Metadata analysis | Traffic morphing layer |
+| Local data exposure | Argon2id + AES-256-GCM encrypted vault |
+| Long-term compromise | Double Ratchet forward secrecy |
+| Quantum adversary | ML-KEM (Kyber) post-quantum KEM |
+| Emergency | Panic engine: Ctrl+Alt+Shift+X wipes vault |
 
 ---
 
-## Panic Button
+## Keyboard Shortcuts
 
-`Ctrl+Alt+Shift+X` triggers an immediate secure shutdown:
-
-1. `SIGKILL` is sent to all `tor` processes.
-2. Two 128 KiB stack frames are filled with random bytes then zeroed via `zeroize`.
-3. A 2 MiB heap region is allocated, filled with random bytes, then zeroed.
-4. `std::process::exit(0)` terminates the process.
-
-Note: `exit()` does not invoke Rust destructors. Key material held in heap-allocated `Zeroizing<>` wrappers will not be explicitly zeroed on exit. The OS reclaims all process memory immediately and Linux will zero pages before reassigning them to another process, but forensic recovery from physical memory remains theoretically possible until those pages are reused.
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send message |
+| `Ctrl+Alt+Shift+X` | **PANIC** — destroy all local data |
 
 ---
 
-## Development
-
-```sh
-git clone https://github.com/4fqr/null-chat
-cd null-chat
-cargo build
-cargo test
-```
-
-The codebase contains no inline comments. Variable names, type names, and function signatures are expected to be self-explanatory. If additional context is needed to understand a function, that function should be refactored rather than annotated.
-
-`rustfmt` is the canonical formatter. Run `cargo fmt` before submitting changes.
-
-There are no external test fixtures. Unit tests live in the same file as the code they test, guarded by `#[cfg(test)]`. Integration tests go in `tests/`.
-
-### Adding a Protocol Gateway
-
-1. Create `src/protocol/your_protocol.rs`.
-2. Define a `YourError`, `YourCredential`, and a client struct.
-3. Route all outbound connections through the `TorManager` SOCKS5 proxy.
-4. Add the module to `src/protocol/mod.rs`.
-5. Add a workspace entry to `CommandCenter::new()`.
-
----
-
-## License
-
-MIT License. See `LICENSE` for full terms.
+*Null Chat is experimental software. It has not been audited. Use at your own risk.*
