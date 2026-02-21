@@ -69,13 +69,19 @@ class IPC:
         return False
 
     def send(self, obj: dict):
+        # debug dump
+        try:
+            print(f"[IPC->Rust] {obj}")
+        except Exception:
+            pass
         with self._lock:
             if not self._sock:
                 return
             try:
                 line = json.dumps(obj) + "\n"
                 self._sock.sendall(line.encode())
-            except OSError:
+            except OSError as e:
+                print(f"[IPC] send failed: {e}")
                 self._alive = False
 
     def readline(self):
@@ -987,6 +993,8 @@ class NullChatApp(ctk.CTk):
 
     def _handle_event(self, ev: dict):
         kind = ev.get("event","")
+        # debug
+        print(f"[Rust->IPC] {ev}")
 
         if kind == "phase":
             phase = ev.get("phase","")
@@ -1033,6 +1041,7 @@ class NullChatApp(ctk.CTk):
 
         elif kind == "error":
             msg = ev.get("msg","")
+            print(f"[ERROR EVENT] {msg}")
             if isinstance(self._screen, SetupScreen):
                 self._screen.show_error(msg)
             else:

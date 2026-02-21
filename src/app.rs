@@ -341,8 +341,16 @@ impl AppState {
     fn persist(&self) {
         if let Some(v) = &self.vault {
             if let Ok(json) = serde_json::to_vec(&self.snapshot()) {
-                let _ = v.put("state", b"snapshot", &json);
+                if let Err(e) = v.put("state", b"snapshot", &json) {
+                    tracing::error!("failed to persist snapshot: {}", e);
+                } else {
+                    tracing::debug!("snapshot persisted");
+                }
+            } else {
+                tracing::error!("snapshot serialization failed");
             }
+        } else {
+            tracing::debug!("persist called but vault not open");
         }
     }
 
@@ -499,8 +507,10 @@ impl AppState {
     }
 
     fn handle_incoming(&mut self, wire: WireMessage) {
+        tracing::info!("incoming wire: {:?}", wire);
         match &wire.kind.clone() {
             WireKind::DirectMessage => {
+                tracing::info!("processing incoming DM from {}", wire.from_id);
                 let fid = match self.friends.iter().find(|f| f.user_id == wire.from_id) {
                     Some(f) => f.id,
                     None => {
@@ -526,6 +536,7 @@ impl AppState {
                     reactions: Vec::new(),
                 });
                 *self.unread.entry(fid.to_string()).or_insert(0) += 1;
+                tracing::debug!("added DM to conversation {:?}", fid);
             }
             WireKind::GroupMessage { group_id } => {
                 if let Ok(gid) = group_id.parse::<Uuid>() {
@@ -540,6 +551,7 @@ impl AppState {
                             reactions: Vec::new(),
                         });
                         *self.unread.entry(gid.to_string()).or_insert(0) += 1;
+                        tracing::debug!("added group message to {}", gid);
                     }
                 }
             }
@@ -547,6 +559,7 @@ impl AppState {
                 if let (Ok(sid), Ok(cid)) = (server_id.parse::<Uuid>(), channel_id.parse::<Uuid>()) {
                     if let Some(s) = self.servers.iter_mut().find(|s| s.id == sid) {
                         if let Some(ch) = s.channels.iter_mut().find(|c| c.id == cid) {
+                            tracing::debug!("adding channel message to {}:{}", sid, cid);
                             ch.messages.push(ChannelMessage {
                                 id: Uuid::new_v4(),
                                 from_id: wire.from_id.clone(),
@@ -681,11 +694,13 @@ async fn send_event(writer: &mut tokio::net::tcp::OwnedWriteHalf, evt: &Event) {
 // ─── Command processor ───────────────────────────────────────────────────────
 
 async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
+    tracing::info!("process_cmd: {:?}", cmd);
     // reject non-setup commands while not in main phase
     match &cmd {
         Cmd::Setup { .. } | Cmd::Unlock { .. } | Cmd::GetState => {}
         _ => {
             if s.phase != Phase::Main {
+                tracing::warn!("command {:?} received during phase {:?}", cmd, s.phase);
                 return vec![Event::Error { msg: "Please unlock the vault first.".into() }];
             }
         }
@@ -757,6 +772,7 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
 
         Cmd::SendDm { friend_id, body } => {
             let body = body.trim().to_string();
+            tracing::info!("SendDm to {}: {}", friend_id, body);
             if body.is_empty() { return vec![]; }
             if let Ok(fid) = friend_id.parse::<Uuid>() {
                 let from_id   = s.my_user_id.clone();
@@ -791,6 +807,7 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
 
         Cmd::SendChannel { server_id, channel_id, body } => {
             let body = body.trim().to_string();
+            tracing::info!("SendChannel server={} channel={} body={}", server_id, channel_id, body);
             if body.is_empty() { return vec![]; }
             let (sid, cid) = match (server_id.parse::<Uuid>(), channel_id.parse::<Uuid>()) {
                 (Ok(a), Ok(b)) => (a, b),
@@ -831,7 +848,12 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
                 };
                 tokio::spawn(async move {
                     for peer in members {
-                        let _ = crate::network::p2p::send_to_peer(&peer, &wire, socks.as_deref()).await;
+                        let res = crate::network::p2p::send_to_peer(&peer, &wire, socks.as_deref()).await;
+                        if let Err(e) = res {
+                            tracing::error!("failed to send channel message to {}: {}", peer, e);
+                        } else {
+                            tracing::debug!("p2p channel message sent to {}", peer);
+                        }
                     }
                 });
             }
@@ -922,6 +944,7 @@ async fn process_cmd(s: &mut AppState, cmd: Cmd) -> Vec<Event> {
         }
 
         Cmd::SaveProfile { name, nick, bio } => {
+            tracing::info!("SaveProfile name='{}' nick='{}' bio='{}'", name, nick, bio);
             let n = name.trim().to_string();
             if !n.is_empty() {
                 s.my_name = n.clone();
